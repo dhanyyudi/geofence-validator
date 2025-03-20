@@ -1,0 +1,13 @@
+geofence-validator/
+├── app/
+│   ├── page.js           # Halaman utama
+│   ├── layout.js         # Layout aplikasi
+│   └── globals.css       # CSS global
+├── components/
+│   ├── FileUploader.js   # Komponen upload file
+│   ├── GeofenceMap.js    # Komponen peta untuk visualisasi
+│   └── Validator.js      # Logika validasi
+├── utils/
+│   └── geofenceUtils.js  # Fungsi utilitas untuk validasi geofence
+└── public/
+    └── ...              # Aset statis
