@@ -1,5 +1,5 @@
 import "./globals.css";
-
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
 
 export const metadata = {
@@ -26,7 +26,10 @@ export default function RootLayout({ children }) {
           referrerPolicy="no-referrer"
         />
       </head>
-      <body className="bg-gray-50 text-gray-800">{children}</body>
+      <body className="bg-gray-50 text-gray-800">
+        {children}
+        <SpeedInsights />
+      </body>
     </html>
   );
 }
