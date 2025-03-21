@@ -11,7 +11,7 @@ export default function DashboardHeader() {
       </div>
       <div className="ml-auto flex items-center space-x-4">
         <a
-          href="https://github.com/yourusername/geofence-validator"
+          href="https://github.com/dhanyyudi"
           target="_blank"
           rel="noopener noreferrer"
           className="text-gray-600 hover:text-gray-800"
