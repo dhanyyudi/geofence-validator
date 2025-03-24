@@ -4,8 +4,7 @@ import "./globals.css";
 
 export const metadata = {
   title: "Geofence Validator Dashboard",
-  description:
-    "Aplikasi interaktif untuk memvalidasi dan memperbaiki file geofence",
+  description: "Interactive app to validate and correct geofence files",
 };
 
 export default function RootLayout({ children }) {
