@@ -11,7 +11,10 @@ import {
   FeatureGroup,
 } from "react-leaflet";
 import * as turf from "@turf/turf";
-import html2canvas from "html2canvas";
+import dynamic from "next/dynamic";
+const html2canvas = dynamic(() => import("html2canvas"), {
+  ssr: false,
+});
 
 // Component to fit map bounds
 function MapBounds({ bounds }) {
@@ -470,6 +473,10 @@ export default function GeofenceComparisonMap({ comparisonData }) {
     if (!mapContainerRef.current) return;
 
     try {
+      // Dynamic import html2canvas only when needed
+      const html2canvasModule = await import("html2canvas");
+      const html2canvas = html2canvasModule.default;
+
       const canvas = await html2canvas(mapContainerRef.current, {
         useCORS: true,
         allowTaint: true,
