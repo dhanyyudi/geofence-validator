@@ -67,7 +67,7 @@ export default function ComparisonPage() {
                 </h4>
                 <ul className="mt-2 text-gray-600 space-y-2 pl-5 list-disc">
                   <li>Upload two .geojson files</li>
-                  <li>Click "Compare Geofences" to visualize them</li>
+                  <li>Click &quot;Compare Geofences&quot; to visualize them</li>
                   <li>Toggle layers to see different views</li>
                   <li>Download the comparison as an image</li>
                 </ul>
