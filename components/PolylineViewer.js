@@ -119,6 +119,16 @@ export default function PolylineViewer({ conversionResult }) {
           <h3 className="font-bold text-lg flex items-center">
             <i className="fas fa-map-marked-alt mr-2 text-blue-500"></i>
             Decoded Polyline
+            {conversionResult.segmentInfo &&
+              conversionResult.segmentInfo.type !== "overall" && (
+                <span className="ml-2 text-sm font-normal text-gray-600">
+                  {conversionResult.segmentInfo.type === "leg"
+                    ? `(Leg ${conversionResult.segmentInfo.legIndex + 1})`
+                    : `(Step ${
+                        conversionResult.segmentInfo.stepIndex + 1
+                      } of Leg ${conversionResult.segmentInfo.legIndex + 1})`}
+                </span>
+              )}
           </h3>
 
           <div className="flex items-center space-x-2">
@@ -230,6 +240,37 @@ export default function PolylineViewer({ conversionResult }) {
                   {conversionResult.outputType}
                 </div>
               </div>
+
+              {conversionResult.metadata &&
+                conversionResult.metadata.distance && (
+                  <div className="p-2 bg-white border border-gray-300 rounded-lg">
+                    <div className="text-xs text-gray-500">Distance</div>
+                    <div className="font-medium">
+                      {(conversionResult.metadata.distance / 1000).toFixed(1)}{" "}
+                      km
+                    </div>
+                  </div>
+                )}
+
+              {conversionResult.metadata &&
+                conversionResult.metadata.duration && (
+                  <div className="p-2 bg-white border border-gray-300 rounded-lg">
+                    <div className="text-xs text-gray-500">Duration</div>
+                    <div className="font-medium">
+                      {Math.floor(conversionResult.metadata.duration / 60)} min
+                    </div>
+                  </div>
+                )}
+
+              {conversionResult.metadata &&
+                conversionResult.metadata.segment && (
+                  <div className="col-span-2 p-2 bg-white border border-gray-300 rounded-lg">
+                    <div className="text-xs text-gray-500">Segment</div>
+                    <div className="font-medium text-sm">
+                      {conversionResult.metadata.segment}
+                    </div>
+                  </div>
+                )}
             </div>
           </div>
         </div>

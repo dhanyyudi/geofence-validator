@@ -8,7 +8,7 @@
   }
 
   .dashboard-sidebar {
-    @apply bg-white shadow-sm z-10 p-6 overflow-y-auto fixed w-80 h-[calc(100vh-64px)] top-16;
+    @apply bg-white shadow-sm z-10 p-4 overflow-y-auto fixed w-80 h-[calc(100vh-64px)] top-16;
   }
 
   .dashboard-content {

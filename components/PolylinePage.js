@@ -5,9 +5,9 @@ import dynamic from "next/dynamic";
 import DashboardHeader from "../components/DashboardHeader";
 import PolylineConverter from "../components/PolylineConverter";
 
-// Import PolylineViewer component dynamically to avoid SSR issues
+// Import PolylineViewer component dynamically WITHOUT ANY SSR
 const PolylineViewer = dynamic(() => import("../components/PolylineViewer"), {
-  ssr: false,
+  ssr: false, // This is critical to prevent window reference errors
   loading: () => (
     <div className="h-96 bg-gray-100 flex items-center justify-center">
       <div className="text-center">
@@ -24,15 +24,17 @@ export default function PolylinePage() {
   const handleConversionComplete = (result) => {
     setConversionResult(result);
     // Use a larger offset to ensure header doesn't cover content
-    setTimeout(() => {
-      const element = document.getElementById("conversion-result");
-      if (element) {
-        window.scrollTo({
-          top: element.offsetTop - 80,
-          behavior: "smooth",
-        });
-      }
-    }, 100);
+    if (typeof window !== "undefined") {
+      setTimeout(() => {
+        const element = document.getElementById("conversion-result");
+        if (element) {
+          window.scrollTo({
+            top: element.offsetTop - 80,
+            behavior: "smooth",
+          });
+        }
+      }, 100);
+    }
   };
 
   return (
@@ -54,6 +56,24 @@ export default function PolylinePage() {
                 <p className="mt-2 text-gray-600">
                   This tool decodes encoded polyline strings to GeoJSON format
                   and visualizes them on a map.
+                </p>
+              </div>
+
+              <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+                <h4 className="font-medium text-gray-700 flex items-center">
+                  <i className="fas fa-link text-blue-500 mr-2"></i>
+                  OSRM URL Support
+                </h4>
+                <p className="mt-2 text-gray-600 text-sm">
+                  You can paste an OSRM API URL to extract and decode the
+                  polyline.
+                </p>
+                <div className="mt-1 text-xs text-gray-500 font-mono bg-gray-100 p-2 rounded overflow-x-auto break-all">
+                  https://mapbox-osrm-proxy.example.com/tdroute/v1/[routing_profile]/[coordinates]?parameters
+                </div>
+                <p className="mt-2 text-gray-600 text-sm">
+                  For routes with multiple waypoints, you can select individual
+                  segments to visualize separately.
                 </p>
               </div>
 
