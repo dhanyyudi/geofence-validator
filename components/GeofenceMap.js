@@ -11,7 +11,7 @@ import {
 } from "react-leaflet";
 import * as turf from "@turf/turf";
 
-// Komponen untuk menyesuaikan tampilan peta
+// Component to adjust map view
 function MapBounds({ bounds }) {
   const map = useMap();
 
@@ -39,7 +39,7 @@ export default function GeofenceMap({
   const mapRef = useRef(null);
   const geoJsonLayers = useRef({});
 
-  // Inisialisasi visibleLayers berdasarkan rings atau polygons
+  // Initialize visibleLayers based on rings or polygons
   useEffect(() => {
     console.log("Map component received rings:", rings ? rings.length : 0);
 
@@ -61,11 +61,11 @@ export default function GeofenceMap({
     }
   }, [rings, polygons]);
 
-  // Hitung bounds untuk geojson
+  // Calculate bounds for geojson
   useEffect(() => {
     if (geojson) {
       try {
-        // Gunakan turf untuk mendapatkan bounding box
+        // Use turf to get the bounding box
         const bbox = turf.bbox(geojson);
         // Convert turf bbox [minX, minY, maxX, maxY] to Leaflet bounds [[minY, minX], [maxY, maxX]]
         const bounds = [
@@ -79,20 +79,20 @@ export default function GeofenceMap({
     }
   }, [geojson]);
 
-  // Fungsi untuk membuat GeoJSON dari satu polygon atau ring
+  // Function to create GeoJSON from a single polygon or ring
   const createPolygonGeoJSON = (item, isRing = false) => {
     if (isRing) {
-      // Jika item adalah ring, buat polygon dengan ring tersebut sebagai exterior
+      // If item is a ring, create a polygon with that ring as exterior
       return {
         type: "Feature",
         properties: {},
         geometry: {
           type: "Polygon",
-          coordinates: [item.coordinates], // Untuk ring, harus dibungkus dalam array
+          coordinates: [item.coordinates], // For ring, must be wrapped in array
         },
       };
     } else {
-      // Jika item adalah polygon, gunakan semua rings-nya
+      // If item is a polygon, use all its rings
       return {
         type: "Feature",
         properties: {},
@@ -104,9 +104,9 @@ export default function GeofenceMap({
     }
   };
 
-  // Style untuk polygon dan ring
+  // Style for polygons and rings
   const getItemStyle = (index, type = "polygon") => {
-    // Array warna untuk berbagai item
+    // Array of colors for different items
     const colors = [
       "#3388ff", // Blue
       "#33a02c", // Green
@@ -120,7 +120,7 @@ export default function GeofenceMap({
       "#fdbf6f", // Light Orange
     ];
 
-    // Jika item adalah ring interior, gunakan warna dengan transparansi lebih tinggi
+    // If item is an interior ring, use color with higher transparency
     const isRingInterior =
       type === "ring" && rings && rings[index] && rings[index].isInterior;
 
@@ -134,7 +134,7 @@ export default function GeofenceMap({
       fillColor:
         index === selectedItem ? "#ff7f50" : colors[index % colors.length],
       fillOpacity: isRingInterior ? 0.2 : 0.4,
-      dashArray: isRingInterior ? "4, 4" : null, // Garis putus-putus untuk ring interior
+      dashArray: isRingInterior ? "4, 4" : null, // Dashed line for interior rings
     };
   };
 
@@ -161,8 +161,8 @@ export default function GeofenceMap({
       return updated;
     });
 
-    // Jika layer menjadi tidak terlihat dan itu adalah layer yang dipilih,
-    // hapus seleksi
+    // If layer becomes invisible and it is the selected layer,
+    // clear selection
     if (!visible) {
       if (type === "ring" && index === selectedRingIndex) {
         setSelectedRingIndex(null);
@@ -178,14 +178,14 @@ export default function GeofenceMap({
     }
   };
 
-  // Tampilkan peta kosong dengan pesan jika tidak ada data
+  // Display empty map with message if no data
   if (!geojson && !polygons) {
     return (
       <div className="map-container flex items-center justify-center bg-gray-100">
         <div className="text-center p-8">
           <i className="fas fa-upload text-4xl text-gray-400 mb-4"></i>
           <p className="text-gray-500">
-            Upload GeoJSON untuk melihat visualisasi
+            Upload GeoJSON to see visualization
           </p>
         </div>
       </div>
@@ -227,7 +227,7 @@ export default function GeofenceMap({
 
         {mapBounds && <MapBounds bounds={mapBounds} />}
 
-        {/* Tampilkan original GeoJSON jika tidak ada polygon khusus */}
+        {/* Display original GeoJSON if no specific polygons */}
         {!polygons && geojson && (
           <GeoJSON
             data={geojson}
@@ -235,7 +235,7 @@ export default function GeofenceMap({
           />
         )}
 
-        {/* Tampilkan polygon individual jika ada */}
+        {/* Display individual polygons if available */}
         {polygons &&
           polygons.map(
             (polygon, index) =>
@@ -243,7 +243,7 @@ export default function GeofenceMap({
                 <GeoJSON
                   key={`polygon-${index}`}
                   data={createPolygonGeoJSON(polygon)}
-                  style={() => getPolygonStyle(index)}
+                  style={() => getItemStyle(index, "polygon")}
                   eventHandlers={{
                     click: () => handlePolygonClick(index),
                   }}
@@ -271,7 +271,7 @@ export default function GeofenceMap({
                   <div
                     className="color-square"
                     style={{
-                      backgroundColor: getPolygonStyle(index).fillColor,
+                      backgroundColor: getItemStyle(index, "polygon").fillColor,
                     }}
                   ></div>
                   <span className="text-xs text-gray-600">
@@ -299,7 +299,7 @@ export default function GeofenceMap({
                 ? "Show All"
                 : "Hide All"}
             </button>
-            {selectedIndex !== null && (
+            {selectedPolygonIndex !== null && (
               <button
                 className="text-xs text-blue-600 hover:text-blue-800"
                 onClick={() => {

@@ -9,7 +9,7 @@ import {
   ZoomControl,
 } from "react-leaflet";
 
-// Komponen untuk menyesuaikan tampilan peta
+// Component to adjust map view
 function MapBounds({ bounds }) {
   const map = useMap();
 
@@ -66,12 +66,12 @@ export default function DirectMultiPolygonMap({
       if (geometry.type === "MultiPolygon") {
         const coordinates = geometry.coordinates;
         if (coordinates && coordinates.length > 0) {
-          // Periksa semua polygon dalam MultiPolygon
+          // Check all polygons in MultiPolygon
           let allRings = [];
 
           coordinates.forEach((polygon, polygonIndex) => {
             if (Array.isArray(polygon) && polygon.length > 0) {
-              // Setiap polygon terdiri dari 1 outer ring dan beberapa inner ring (holes)
+              // Each polygon consists of 1 outer ring and several inner rings (holes)
               polygon.forEach((ring, ringIndex) => {
                 allRings.push({
                   ringIndex: allRings.length, // Unique index for all rings
@@ -142,7 +142,7 @@ export default function DirectMultiPolygonMap({
     }
   }, [geojson]);
 
-  // Fungsi untuk membuat GeoJSON dari satu ring
+  // Function to create GeoJSON from a single ring
   const createRingGeoJSON = (ring) => {
     if (!ring || !ring.coordinates) {
       console.warn("Invalid ring:", ring);
@@ -167,17 +167,17 @@ export default function DirectMultiPolygonMap({
       },
       geometry: {
         type: "Polygon",
-        coordinates: [ring.coordinates], // Ring dibungkus dalam array
+        coordinates: [ring.coordinates], // Ring wrapped in array
       },
     };
   };
 
-  // Style untuk ring
+  // Style for rings
   const getRingStyle = (ring) => {
     const isSelected = ring.ringIndex === selectedRingIndex;
     const isExterior = ring.isExterior;
 
-    // Array warna untuk berbagai ring
+    // Array of colors for different rings
     const colors = [
       "#3388ff", // Blue
       "#33a02c", // Green
@@ -194,7 +194,7 @@ export default function DirectMultiPolygonMap({
         ? "#ff7f50"
         : colors[ring.ringIndex % colors.length],
       fillOpacity: isExterior ? 0.4 : 0.2,
-      dashArray: !isExterior ? "4, 4" : null, // Garis putus-putus untuk ring interior
+      dashArray: !isExterior ? "4, 4" : null, // Dashed line for interior rings
     };
   };
 
@@ -300,7 +300,7 @@ export default function DirectMultiPolygonMap({
                     {ring.isExterior ? "Exterior" : "Interior"})
                   </div>
                   <div className="text-xs text-gray-600">
-                    {ring.coordinates.length} titik
+                    {ring.coordinates.length} points
                   </div>
                 </div>
               </div>
