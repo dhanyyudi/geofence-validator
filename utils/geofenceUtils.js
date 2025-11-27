@@ -1,13 +1,13 @@
 import * as turf from "@turf/turf";
 
-// Fungsi validasi GeoJSON dasar
+// Basic GeoJSON validation function
 function isValidGeoJSON(geojson) {
-  // Cek apakah geojson adalah objek
+  // Check if geojson is an object
   if (!geojson || typeof geojson !== "object") {
-    return { valid: false, error: "GeoJSON harus berupa objek." };
+    return { valid: false, error: "GeoJSON must be an object." };
   }
 
-  // Cek tipe GeoJSON
+  // Check GeoJSON type
   const validTypes = [
     "FeatureCollection",
     "Feature",
@@ -24,20 +24,20 @@ function isValidGeoJSON(geojson) {
     if (!Array.isArray(geojson.features)) {
       return {
         valid: false,
-        error: 'FeatureCollection harus memiliki array "features".',
+        error: 'FeatureCollection must have a "features" array.',
       };
     }
   } else if (geojson.type === "Feature") {
     if (!geojson.geometry) {
       return {
         valid: false,
-        error: 'Feature harus memiliki property "geometry".',
+        error: 'Feature must have a "geometry" property.',
       };
     }
   } else if (!validTypes.includes(geojson.type)) {
     return {
       valid: false,
-      error: `Tipe GeoJSON "${geojson.type}" tidak valid.`,
+      error: `GeoJSON type "${geojson.type}" is not valid.`,
     };
   }
 
@@ -45,7 +45,7 @@ function isValidGeoJSON(geojson) {
 }
 
 export function validateGeofence(geojson) {
-  // Tambahkan console log untuk debug
+  // Add console log for debugging
   console.log("Starting validation for:", geojson.name || "GeoJSON file");
 
   const result = {
@@ -61,16 +61,16 @@ export function validateGeofence(geojson) {
   if (!geojson || typeof geojson !== "object") {
     result.isValid = false;
     result.errors.push(
-      "GeoJSON tidak valid: Data tidak lengkap atau bukan objek valid"
+      "Invalid GeoJSON: Data is incomplete or not a valid object"
     );
     return result;
   }
 
-  // Validasi format GeoJSON dasar
+  // Basic GeoJSON format validation
   const basicValidation = isValidGeoJSON(geojson);
   if (!basicValidation.valid) {
     result.isValid = false;
-    result.errors.push("GeoJSON tidak valid: " + basicValidation.error);
+    result.errors.push("Invalid GeoJSON: " + basicValidation.error);
     return result;
   }
 
@@ -92,12 +92,12 @@ export function validateGeofence(geojson) {
         "Geofence has z-coordinates. This can cause compatibility issues."
       );
       result.fixes.removeZCoordinates = {
-        description: "Hapus z-coordinates",
+        description: "Remove z-coordinates",
         apply: () => removeZCoordinates(geojson),
       };
     }
 
-    // 4. Check type MultiPolygon dan multiple polygons dan rings
+    // 4. Check MultiPolygon type, multiple polygons, and rings
     const geometryInfo = checkGeometryType(geojson);
 
     if (geometryInfo.isMultiPolygon) {
@@ -105,9 +105,9 @@ export function validateGeofence(geojson) {
         "Geofence has MultiPolygon type. It is recommended to use a single Polygon type."
       );
 
-      // Tambahkan informasi tentang jumlah rings jika ada
+      // Add information about the number of rings if any
       if (geometryInfo.rings && geometryInfo.rings.length > 0) {
-        // Hitung jumlah exterior dan interior rings
+        // Count exterior and interior rings
         const exteriorCount =
           geometryInfo.rings.filter((r) => r && r.isExterior).length || 0;
         const interiorCount =
@@ -117,7 +117,7 @@ export function validateGeofence(geojson) {
           `Found ${geometryInfo.rings.length} rings (${exteriorCount} exterior, ${interiorCount} interior/holes).`
         );
 
-        // Tampilkan debugging untuk rings
+        // Display debugging for rings
         console.log("Rings extracted:", geometryInfo.rings.length);
         geometryInfo.rings.forEach((r, i) => {
           if (r) {
@@ -129,9 +129,9 @@ export function validateGeofence(geojson) {
           }
         });
 
-        // Tambahkan opsi perbaikan untuk konversi ke ring tunggal
+        // Add fix option for converting to single ring
         result.fixes.convertToSingleRing = {
-          description: "Konversi ke Polygon dengan ring tunggal",
+          description: "Convert to Polygon with single ring",
           rings: geometryInfo.rings,
           apply: (selectedRingIndex) =>
             convertToSingleRing(geojson, selectedRingIndex),
@@ -142,12 +142,12 @@ export function validateGeofence(geojson) {
         `Geofence has ${geometryInfo.polygons.length} polygons. It is recommended to use only one polygon.`
       );
       result.fixes.selectPolygon = {
-        description: "Pilih satu polygon",
+        description: "Select one polygon",
         polygons: geometryInfo.polygons,
         apply: (selectedIndex) => selectSinglePolygon(geojson, selectedIndex),
       };
     } else if (geometryInfo.rings && geometryInfo.rings.length > 1) {
-      // Jika tipe sudah Polygon tapi masih memiliki multiple rings
+      // If type is already Polygon but still has multiple rings
       const exteriorCount =
         geometryInfo.rings.filter((r) => r && r.isExterior).length || 0;
       const interiorCount =
@@ -158,16 +158,16 @@ export function validateGeofence(geojson) {
       );
 
       result.fixes.convertToSingleRing = {
-        description: "Konversi ke Polygon dengan ring tunggal",
+        description: "Convert to Polygon with single ring",
         rings: geometryInfo.rings,
         apply: (selectedRingIndex) =>
           convertToSingleRing(geojson, selectedRingIndex),
       };
     }
 
-    // Ekstraksi manual untuk multipolygon jika deteksi normal gagal
+    // Manual extraction for multipolygon if normal detection fails
     if (!result.fixes.convertToSingleRing) {
-      // Periksa jika ada fitur dengan tipe MultiPolygon
+      // Check if there's a feature with MultiPolygon type
       const feature = geojson.features && geojson.features[0];
       if (
         feature &&
@@ -176,7 +176,7 @@ export function validateGeofence(geojson) {
       ) {
         const coordinates = feature.geometry.coordinates;
         if (coordinates && coordinates.length > 0) {
-          // Ekstrak rings dari polygon pertama jika belum ada
+          // Extract rings from the first polygon if not already done
           const firstPolygon = coordinates[0];
           if (Array.isArray(firstPolygon) && firstPolygon.length > 0) {
             console.log(
@@ -194,7 +194,7 @@ export function validateGeofence(geojson) {
               isInterior: ringIndex > 0,
             }));
 
-            // Debug untuk melihat rings yang diekstrak
+            // Debug to see extracted rings
             manualRings.forEach((r, i) => {
               console.log(
                 `Manual Ring ${i}: ${r.isExterior ? "Exterior" : "Interior"}, ${
@@ -209,7 +209,7 @@ export function validateGeofence(geojson) {
               );
 
               result.fixes.convertToSingleRing = {
-                description: "Konversi ke Polygon dengan ring tunggal",
+                description: "Convert to Polygon with single ring",
                 rings: manualRings,
                 apply: (selectedRingIndex) =>
                   convertToSingleRing(geojson, selectedRingIndex),
@@ -220,7 +220,7 @@ export function validateGeofence(geojson) {
       }
     }
   } catch (error) {
-    // Tangkap error yang tidak terduga selama validasi
+    // Catch unexpected errors during validation
     console.error("Error during validation:", error);
     result.isValid = false;
     result.errors.push(`Error during validation: ${error.message}`);
@@ -240,7 +240,7 @@ export function validateGeofence(geojson) {
 }
 
 function checkCoordinateSystem(geojson) {
-  // Memeriksa apakah koordinat berada dalam kisaran latitude/longitude
+  // Check if coordinates are within latitude/longitude range
   let hasInvalidCoords = false;
 
   const checkCoords = (coords) => {
@@ -253,8 +253,8 @@ function checkCoordinateSystem(geojson) {
         const lon = coord[0];
         const lat = coord[1];
 
-        // Longitude harus dalam range -180 sampai 180
-        // Latitude harus dalam range -90 sampai 90
+        // Longitude must be in range -180 to 180
+        // Latitude must be in range -90 to 90
         if (lon < -180 || lon > 180 || lat < -90 || lat > 90) {
           hasInvalidCoords = true;
           return;
@@ -263,7 +263,7 @@ function checkCoordinateSystem(geojson) {
     }
   };
 
-  // Periksa untuk semua fitur jika ini FeatureCollection
+  // Check all features if this is a FeatureCollection
   if (geojson.type === "FeatureCollection") {
     for (const feature of geojson.features) {
       if (feature.geometry && feature.geometry.coordinates) {
@@ -271,13 +271,13 @@ function checkCoordinateSystem(geojson) {
       }
     }
   }
-  // Periksa fitur tunggal
+  // Check single feature
   else if (geojson.type === "Feature") {
     if (geojson.geometry && geojson.geometry.coordinates) {
       checkCoords(geojson.geometry.coordinates);
     }
   }
-  // Periksa geometry secara langsung
+  // Check geometry directly
   else if (geojson.coordinates) {
     checkCoords(geojson.coordinates);
   }
@@ -467,9 +467,9 @@ function calculateArea(polygonCoords) {
   }
 }
 
-// Fungsi untuk memastikan format standar GeoJSON
+// Function to ensure standard GeoJSON format
 function ensureStandardFormat(geojson) {
-  // Format standar yang diinginkan:
+  // Desired standard format:
   // {
   //   "type": "FeatureCollection",
   //   "features": [{
@@ -482,7 +482,7 @@ function ensureStandardFormat(geojson) {
   //   }]
   // }
 
-  // Copy properties jika ada
+  // Copy properties if available
   let properties = {};
 
   // Extract properties from existing GeoJSON
@@ -496,7 +496,7 @@ function ensureStandardFormat(geojson) {
     properties = geojson.properties || {};
   }
 
-  // Cari koordinat polygon
+  // Find polygon coordinates
   let polygonCoordinates = null;
 
   // Extract coordinates from the first polygon we can find
@@ -572,14 +572,14 @@ function ensureStandardFormat(geojson) {
   };
 }
 
-// Fungsi untuk mengkonversi ke format yang diinginkan dengan hanya 1 ring (exterior)
+// Function to convert to desired format with only 1 ring (exterior)
 function convertToSingleRing(geojson, selectedRingIndex) {
   console.log("convertToSingleRing called with ring index:", selectedRingIndex);
 
-  // Deep clone untuk menghindari modifikasi objek asli
+  // Deep clone to avoid modifying the original object
   const newGeojson = JSON.parse(JSON.stringify(geojson));
 
-  // Simpan properties jika ada
+  // Save properties if available
   let properties = {};
   if (
     newGeojson.type === "FeatureCollection" &&
@@ -747,7 +747,7 @@ function selectSinglePolygon(geojson, selectedIndex) {
   };
 }
 
-// Fungsi untuk memilih beberapa polygon berdasarkan layer yang terlihat
+// Function to select multiple polygons based on visible layers
 export function selectVisiblePolygons(geojson, visibleLayers) {
   // Ensure standard format output with the first visible polygon
   return selectSinglePolygon(
