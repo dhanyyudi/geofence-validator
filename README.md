@@ -29,6 +29,7 @@ A comprehensive web application for validating, fixing, and analyzing GeoJSON ge
   - Direct polyline string input
   - OSRM API URL parsing
   - File upload (.txt files)
+- **Input Normalization**: Handles embedded polyline query strings and infers `polyline` vs `polyline6` precision automatically
 - **Route Segment Selection**: Extract and convert specific route segments
 - **Format Options**:
   - LineString (for routes)
@@ -36,6 +37,7 @@ A comprehensive web application for validating, fixing, and analyzing GeoJSON ge
 - **Precision Control**: Support for precision levels 5 and 6
 - **OSRM Integration**: Fetch and decode polylines from OSRM routing responses
 - **Route Metadata**: Display distance, duration, and waypoint information
+- **Safer UI State**: Decode actions and file success status only apply to the currently active input tab
 
 ## Installation
 
@@ -135,16 +137,19 @@ npm run start
    - **Direct Input**: Paste encoded polyline string
    - **OSRM URL**: Enter OSRM API URL to extract polyline
    - **File Upload**: Upload a .txt file containing polyline
+   - The decode button only activates when the selected tab has valid input
 
 3. **Configure Options**
    - Select precision level (5 or 6)
    - Choose output format (LineString or Polygon)
    - For OSRM URLs: Select specific route segment if needed
+   - Precision is auto-adjusted when the source declares `geometries=polyline` or `polyline6`
 
 4. **Decode Polyline**
    - Click "Decode Polyline" button
    - View the decoded route on the map
    - See route metadata (distance, duration, waypoints)
+   - Invalid or non-polyline input is rejected before rendering
 
 5. **Download Results**
    - Click "Download GeoJSON" to save the converted file

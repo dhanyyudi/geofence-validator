@@ -2,6 +2,79 @@
  * Utility functions for working with OSRM API responses
  */
 
+const POLYLINE_QUERY_KEYS = ["geometry", "polyline", "encodedPolyline"];
+
+export function inferPrecisionFromGeometry(geometryType) {
+  if (geometryType === "polyline6") return 6;
+  if (geometryType === "polyline") return 5;
+  return null;
+}
+
+function extractPolylineFromSearchParams(searchParams) {
+  for (const key of POLYLINE_QUERY_KEYS) {
+    const value = searchParams.get(key);
+    if (value) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+export function normalizePolylineInput(input) {
+  const trimmed = input?.trim();
+  if (!trimmed) {
+    return { type: "empty", value: "", inferredPrecision: null };
+  }
+
+  try {
+    const url = new URL(trimmed);
+    const embeddedPolyline = extractPolylineFromSearchParams(url.searchParams);
+    if (embeddedPolyline) {
+      return {
+        type: "embedded-polyline",
+        value: decodeURIComponent(embeddedPolyline),
+        inferredPrecision: inferPrecisionFromGeometry(
+          url.searchParams.get("geometries")
+        ),
+      };
+    }
+
+    return {
+      type: "url",
+      value: trimmed,
+      inferredPrecision: inferPrecisionFromGeometry(
+        url.searchParams.get("geometries")
+      ),
+    };
+  } catch {}
+
+  const queryIndex = trimmed.indexOf("?");
+  const possibleQuery = queryIndex >= 0 ? trimmed.slice(queryIndex + 1) : trimmed;
+  const searchParams = new URLSearchParams(possibleQuery);
+  const embeddedPolyline = extractPolylineFromSearchParams(searchParams);
+  if (embeddedPolyline) {
+    return {
+      type: "embedded-polyline",
+      value: decodeURIComponent(embeddedPolyline),
+      inferredPrecision: inferPrecisionFromGeometry(searchParams.get("geometries")),
+    };
+  }
+
+  const suffixMatch = trimmed.match(
+    /^([^?&]+)&(geometries|overview|steps|start_time|annotations|approaches)=/i
+  );
+  if (suffixMatch) {
+    return {
+      type: "embedded-polyline",
+      value: suffixMatch[1],
+      inferredPrecision: inferPrecisionFromGeometry(searchParams.get("geometries")),
+    };
+  }
+
+  return { type: "polyline", value: trimmed, inferredPrecision: null };
+}
+
 /**
  * Extracts an encoded polyline from an OSRM API URL by making a request and
  * parsing the JSON response.

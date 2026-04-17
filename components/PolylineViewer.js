@@ -1,62 +1,40 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
-  MapContainer,
-  TileLayer,
-  GeoJSON,
-  useMap,
-  ZoomControl,
-} from "react-leaflet";
-import * as turf from "@turf/turf";
-
-// Component for adjusting map view
-function MapBounds({ bounds }) {
-  const map = useMap();
-
-  useEffect(() => {
-    if (bounds) {
-      map.fitBounds(bounds);
-    }
-  }, [bounds, map]);
-
-  return null;
-}
+  Map as MaplibreMap,
+  Source,
+  Layer,
+  NavigationControl,
+  AttributionControl,
+} from "react-map-gl/maplibre";
+import "maplibre-gl/dist/maplibre-gl.css";
+import {
+  MAP_STYLES,
+  MAP_STYLE_LABELS,
+  getGeojsonBounds,
+} from "../utils/mapStyles";
+import { useMapFit } from "../utils/useMapFit";
 
 export default function PolylineViewer({ conversionResult }) {
-  const [mapBounds, setMapBounds] = useState(null);
+  const mapRef = useRef(null);
+  const [styleKey, setStyleKey] = useState("osm");
   const [copySuccess, setCopySuccess] = useState(null);
   const [coordinatesVisible, setCoordinatesVisible] = useState(false);
-  const mapRef = useRef(null);
   const coordTextareaRef = useRef(null);
 
-  // Calculate bounds for the map
-  useEffect(() => {
-    if (!conversionResult || !conversionResult.success) return;
-
-    try {
-      // Use turf to get the bounding box
-      const bbox = turf.bbox(conversionResult.geojson);
-
-      // Convert turf bbox [minX, minY, maxX, maxY] to Leaflet bounds [[minY, minX], [maxY, maxX]]
-      const bounds = [
-        [bbox[1], bbox[0]], // SW corner [lat, lng]
-        [bbox[3], bbox[2]], // NE corner [lat, lng]
-      ];
-
-      setMapBounds(bounds);
-    } catch (error) {
-      console.error("Error calculating bounds:", error);
-    }
+  const bounds = useMemo(() => {
+    if (!conversionResult?.success) return null;
+    return getGeojsonBounds(conversionResult.geojson);
   }, [conversionResult]);
 
-  const handleDownloadGeoJSON = () => {
-    if (!conversionResult || !conversionResult.success) return;
+  const { handleLoad } = useMapFit(mapRef, bounds);
 
+  const handleDownloadGeoJSON = () => {
+    if (!conversionResult?.success) return;
     const jsonString = JSON.stringify(conversionResult.geojson, null, 2);
     const blob = new Blob([jsonString], { type: "application/json" });
     const url = URL.createObjectURL(blob);
-
     const a = document.createElement("a");
     a.href = url;
     a.download = "polyline_decoded.geojson";
@@ -67,13 +45,10 @@ export default function PolylineViewer({ conversionResult }) {
   };
 
   const handleCopyCoordinates = () => {
-    if (!conversionResult || !conversionResult.success) return;
-
-    // Format coordinates as a readable list
+    if (!conversionResult?.success) return;
     const formattedCoords = conversionResult.coordinates
       .map((coord) => `[${coord[0].toFixed(6)}, ${coord[1].toFixed(6)}]`)
       .join(",\n");
-
     navigator.clipboard
       .writeText(`[\n${formattedCoords}\n]`)
       .then(() => {
@@ -84,19 +59,6 @@ export default function PolylineViewer({ conversionResult }) {
         console.error("Error copying coordinates:", err);
         setCopySuccess("Failed to copy");
       });
-  };
-
-  const toggleCoordinatesVisibility = () => {
-    setCoordinatesVisible(!coordinatesVisible);
-  };
-
-  // Style for the GeoJSON feature
-  const geoJSONStyle = {
-    color: "#3388ff",
-    weight: 4,
-    opacity: 0.8,
-    fillColor: "#3388ff",
-    fillOpacity: 0.2,
   };
 
   if (!conversionResult || !conversionResult.success) {
@@ -111,6 +73,8 @@ export default function PolylineViewer({ conversionResult }) {
       </div>
     );
   }
+
+  const isPolygon = conversionResult.outputType === "polygon";
 
   return (
     <div className="bg-white rounded-lg shadow-md overflow-hidden">
@@ -133,10 +97,10 @@ export default function PolylineViewer({ conversionResult }) {
 
           <div className="flex items-center space-x-2">
             <button
-              onClick={toggleCoordinatesVisibility}
+              onClick={() => setCoordinatesVisible((v) => !v)}
               className="btn btn-outline py-1 px-3 text-sm"
             >
-              <i className={`fas fa-list mr-1`}></i>
+              <i className="fas fa-list mr-1"></i>
               {coordinatesVisible ? "Hide Coordinates" : "Show Coordinates"}
             </button>
 
@@ -170,47 +134,67 @@ export default function PolylineViewer({ conversionResult }) {
             <span className="font-medium">Coordinates</span>
             <span className="ml-2 text-xs">
               ({conversionResult.coordinates.length} points,{" "}
-              {conversionResult.outputType === "polygon"
-                ? "Polygon"
-                : "LineString"}
-              )
+              {isPolygon ? "Polygon" : "LineString"})
             </span>
           </div>
-          <div className="relative">
-            <textarea
-              ref={coordTextareaRef}
-              readOnly
-              value={conversionResult.coordinates
-                .map(
-                  (coord) => `[${coord[0].toFixed(6)}, ${coord[1].toFixed(6)}]`
-                )
-                .join(",\n")}
-              className="w-full p-3 border border-gray-300 rounded-lg bg-white text-xs font-mono h-48 overflow-auto"
-            />
-          </div>
+          <textarea
+            ref={coordTextareaRef}
+            readOnly
+            value={conversionResult.coordinates
+              .map(
+                (coord) => `[${coord[0].toFixed(6)}, ${coord[1].toFixed(6)}]`
+              )
+              .join(",\n")}
+            className="w-full p-3 border border-gray-300 rounded-lg bg-white text-xs font-mono h-48 overflow-auto"
+          />
         </div>
       )}
 
-      <div className="h-[calc(100vh-300px)]">
-        <MapContainer
-          style={{ height: "100%", width: "100%" }}
-          center={[0, 0]}
-          zoom={2}
-          scrollWheelZoom={true}
-          zoomControl={false}
+      <div className="h-[calc(100vh-300px)] relative">
+        <MaplibreMap
           ref={mapRef}
+          initialViewState={{ longitude: 0, latitude: 0, zoom: 2 }}
+          style={{ width: "100%", height: "100%" }}
+          mapStyle={MAP_STYLES[styleKey]}
+          attributionControl={false}
+          onLoad={handleLoad}
         >
-          <ZoomControl position="bottomright" />
+          <NavigationControl position="bottom-right" />
+          <AttributionControl compact position="bottom-left" />
+          <Source id="polyline" type="geojson" data={conversionResult.geojson}>
+            {isPolygon && (
+              <Layer
+                id="polyline-fill"
+                type="fill"
+                paint={{ "fill-color": "#3388ff", "fill-opacity": 0.2 }}
+              />
+            )}
+            <Layer
+              id="polyline-line"
+              type="line"
+              paint={{
+                "line-color": "#1d4ed8",
+                "line-width": 4,
+                "line-opacity": 0.85,
+              }}
+            />
+          </Source>
+        </MaplibreMap>
 
-          <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
-
-          {mapBounds && <MapBounds bounds={mapBounds} />}
-
-          <GeoJSON data={conversionResult.geojson} style={geoJSONStyle} />
-        </MapContainer>
+        <div className="absolute top-3 right-3 bg-white/95 rounded-lg shadow-md p-2 text-xs z-10">
+          <select
+            value={styleKey}
+            onChange={(e) => setStyleKey(e.target.value)}
+            className="border border-gray-200 rounded px-2 py-1 bg-white"
+            aria-label="Base layer"
+          >
+            {Object.keys(MAP_STYLES).map((k) => (
+              <option key={k} value={k}>
+                {MAP_STYLE_LABELS[k]}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       <div className="p-4 bg-gray-50 border-t">
@@ -241,36 +225,32 @@ export default function PolylineViewer({ conversionResult }) {
                 </div>
               </div>
 
-              {conversionResult.metadata &&
-                conversionResult.metadata.distance && (
-                  <div className="p-2 bg-white border border-gray-300 rounded-lg">
-                    <div className="text-xs text-gray-500">Distance</div>
-                    <div className="font-medium">
-                      {(conversionResult.metadata.distance / 1000).toFixed(1)}{" "}
-                      km
-                    </div>
+              {conversionResult.metadata?.distance && (
+                <div className="p-2 bg-white border border-gray-300 rounded-lg">
+                  <div className="text-xs text-gray-500">Distance</div>
+                  <div className="font-medium">
+                    {(conversionResult.metadata.distance / 1000).toFixed(1)} km
                   </div>
-                )}
+                </div>
+              )}
 
-              {conversionResult.metadata &&
-                conversionResult.metadata.duration && (
-                  <div className="p-2 bg-white border border-gray-300 rounded-lg">
-                    <div className="text-xs text-gray-500">Duration</div>
-                    <div className="font-medium">
-                      {Math.floor(conversionResult.metadata.duration / 60)} min
-                    </div>
+              {conversionResult.metadata?.duration && (
+                <div className="p-2 bg-white border border-gray-300 rounded-lg">
+                  <div className="text-xs text-gray-500">Duration</div>
+                  <div className="font-medium">
+                    {Math.floor(conversionResult.metadata.duration / 60)} min
                   </div>
-                )}
+                </div>
+              )}
 
-              {conversionResult.metadata &&
-                conversionResult.metadata.segment && (
-                  <div className="col-span-2 p-2 bg-white border border-gray-300 rounded-lg">
-                    <div className="text-xs text-gray-500">Segment</div>
-                    <div className="font-medium text-sm">
-                      {conversionResult.metadata.segment}
-                    </div>
+              {conversionResult.metadata?.segment && (
+                <div className="col-span-2 p-2 bg-white border border-gray-300 rounded-lg">
+                  <div className="text-xs text-gray-500">Segment</div>
+                  <div className="font-medium text-sm">
+                    {conversionResult.metadata.segment}
                   </div>
-                )}
+                </div>
+              )}
             </div>
           </div>
         </div>

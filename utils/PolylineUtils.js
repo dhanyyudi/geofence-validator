@@ -57,6 +57,65 @@ export function decodePolyline(polyline, precision = 6) {
 }
 
 /**
+ * Validates decoded coordinates before they are rendered on the map.
+ *
+ * @param {Array} coordinates - Array of [longitude, latitude] pairs
+ * @param {Object} options - Validation options
+ * @param {number} options.minPoints - Minimum required coordinate count
+ * @returns {Array} - The validated coordinates
+ */
+export function validateCoordinates(coordinates, { minPoints = 2 } = {}) {
+  if (!Array.isArray(coordinates) || coordinates.length < minPoints) {
+    throw new Error(
+      `Polyline must contain at least ${minPoints} coordinate${
+        minPoints === 1 ? "" : "s"
+      }.`
+    );
+  }
+
+  const invalidIndex = coordinates.findIndex((coord) => {
+    if (!Array.isArray(coord) || coord.length < 2) return true;
+    const [lng, lat] = coord;
+    return (
+      !Number.isFinite(lng) ||
+      !Number.isFinite(lat) ||
+      Math.abs(lng) > 180 ||
+      Math.abs(lat) > 90
+    );
+  });
+
+  if (invalidIndex !== -1) {
+    throw new Error(
+      `Decoded coordinates are invalid near point ${invalidIndex + 1}. Check the input and precision.`
+    );
+  }
+
+  return coordinates;
+}
+
+/**
+ * Converts decoded coordinates into a GeoJSON LineString FeatureCollection.
+ *
+ * @param {Array} coordinates - Array of [longitude, latitude] coordinates
+ * @returns {Object} - GeoJSON FeatureCollection object
+ */
+export function coordinatesToGeoJSON(coordinates) {
+  return {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        properties: {},
+        geometry: {
+          coordinates,
+          type: "LineString",
+        },
+      },
+    ],
+  };
+}
+
+/**
  * Converts an encoded polyline string to a GeoJSON object.
  *
  * @param {string} polyline - Encoded polyline string
@@ -65,22 +124,7 @@ export function decodePolyline(polyline, precision = 6) {
  */
 export function polylineToGeoJSON(polyline, precision = 6) {
   const coordinates = decodePolyline(polyline, precision);
-
-  const geojson = {
-    type: "FeatureCollection",
-    features: [
-      {
-        type: "Feature",
-        properties: {},
-        geometry: {
-          coordinates: coordinates,
-          type: "LineString",
-        },
-      },
-    ],
-  };
-
-  return geojson;
+  return coordinatesToGeoJSON(coordinates);
 }
 
 /**

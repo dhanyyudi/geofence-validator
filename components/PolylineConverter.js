@@ -1,16 +1,23 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import {
   decodePolyline,
-  polylineToGeoJSON,
-  encodePolyline,
+  coordinatesToGeoJSON,
   polylineToPolygon,
+  validateCoordinates,
 } from "../utils/PolylineUtils";
-import { extractPolylineFromURL } from "../utils/OSRMUtils";
+import {
+  extractParametersFromURL,
+  extractPolylineFromURL,
+  normalizePolylineInput,
+} from "../utils/OSRMUtils";
 
 export default function PolylineConverter({ onConversionComplete }) {
-  const [encodedPolyline, setEncodedPolyline] = useState("");
+  const [directPolyline, setDirectPolyline] = useState("");
+  const [urlPolyline, setUrlPolyline] = useState("");
+  const [filePolyline, setFilePolyline] = useState("");
+  const [uploadedFileName, setUploadedFileName] = useState("");
   const [precision, setPrecision] = useState(6);
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -29,12 +36,19 @@ export default function PolylineConverter({ onConversionComplete }) {
   const fileInputRef = useRef(null);
 
   const handleInputChange = (e) => {
-    setEncodedPolyline(e.target.value);
+    setDirectPolyline(e.target.value);
+    setApiResponse(null);
+    setRouteSegments([]);
+    setSelectedSegment({ type: "overall", legIndex: null, stepIndex: null });
     if (error) setError(null);
   };
 
   const handleUrlChange = (e) => {
     setOsrmUrl(e.target.value);
+    setUrlPolyline("");
+    setApiResponse(null);
+    setRouteSegments([]);
+    setSelectedSegment({ type: "overall", legIndex: null, stepIndex: null });
     if (error) setError(null);
   };
 
@@ -52,6 +66,7 @@ export default function PolylineConverter({ onConversionComplete }) {
 
     // Reset segment selection if changing away from URL method
     if (method !== "url") {
+      setApiResponse(null);
       setSelectedSegment({ type: "overall", legIndex: null, stepIndex: null });
       setRouteSegments([]);
     }
@@ -65,7 +80,11 @@ export default function PolylineConverter({ onConversionComplete }) {
     reader.onload = (e) => {
       try {
         const content = e.target.result;
-        setEncodedPolyline(content.trim());
+        setFilePolyline(content.trim());
+        setUploadedFileName(file.name);
+        setApiResponse(null);
+        setRouteSegments([]);
+        setSelectedSegment({ type: "overall", legIndex: null, stepIndex: null });
         if (error) setError(null);
       } catch (err) {
         setError(`Error reading file: ${err.message}`);
@@ -89,8 +108,12 @@ export default function PolylineConverter({ onConversionComplete }) {
     try {
       const result = await extractPolylineFromURL(osrmUrl);
       if (result.success) {
-        setEncodedPolyline(result.encodedPolyline);
+        setUrlPolyline(result.encodedPolyline);
         setApiResponse(result.response);
+        const params = extractParametersFromURL(osrmUrl);
+        if (!params.error && (params.geometries === "polyline" || params.geometries === "polyline6")) {
+          setPrecision(params.geometries === "polyline6" ? 6 : 5);
+        }
 
         // Set route segments if available
         if (result.routeSegments && result.routeSegments.length > 0) {
@@ -102,9 +125,17 @@ export default function PolylineConverter({ onConversionComplete }) {
           });
         }
       } else {
+        setUrlPolyline("");
+        setApiResponse(null);
+        setRouteSegments([]);
+        setSelectedSegment({ type: "overall", legIndex: null, stepIndex: null });
         setError(result.error || "Failed to extract polyline from URL");
       }
     } catch (err) {
+      setUrlPolyline("");
+      setApiResponse(null);
+      setRouteSegments([]);
+      setSelectedSegment({ type: "overall", legIndex: null, stepIndex: null });
       setError(`Error fetching from URL: ${err.message}`);
     } finally {
       setIsLoading(false);
@@ -116,26 +147,33 @@ export default function PolylineConverter({ onConversionComplete }) {
 
     // Update the encoded polyline based on selection
     if (type === "overall") {
-      setEncodedPolyline(apiResponse.routes[0].geometry);
+      setUrlPolyline(apiResponse.routes[0].geometry);
     } else if (type === "leg" && legIndex !== null) {
       const segment = routeSegments.find(
         (seg) => seg.type === "leg" && seg.index === legIndex
       );
       if (segment && segment.geometry) {
-        setEncodedPolyline(segment.geometry);
+        setUrlPolyline(segment.geometry);
       }
     } else if (type === "step" && legIndex !== null && stepIndex !== null) {
       const leg = routeSegments.find(
         (seg) => seg.type === "leg" && seg.index === legIndex
       );
       if (leg && leg.steps && leg.steps[stepIndex]?.geometry) {
-        setEncodedPolyline(leg.steps[stepIndex].geometry);
+        setUrlPolyline(leg.steps[stepIndex].geometry);
       }
     }
   };
 
-  const handleDecode = () => {
-    if (!encodedPolyline.trim()) {
+  const handleDecode = async () => {
+    const activePolyline =
+      inputMethod === "direct"
+        ? directPolyline
+        : inputMethod === "url"
+          ? urlPolyline
+          : filePolyline;
+
+    if (!activePolyline.trim()) {
       setError("Please enter an encoded polyline string.");
       return;
     }
@@ -144,13 +182,43 @@ export default function PolylineConverter({ onConversionComplete }) {
     setError(null);
 
     try {
-      // Decode the polyline
-      const coordinates = decodePolyline(encodedPolyline, precision);
+      const normalizedInput = normalizePolylineInput(activePolyline);
+      let polylineToDecode = normalizedInput.value;
+      let precisionToUse = normalizedInput.inferredPrecision ?? precision;
+      let resolvedApiResponse = apiResponse;
+      let resolvedRouteSegments = routeSegments;
+      let resolvedSegmentInfo = selectedSegment;
 
-      if (coordinates.length === 0) {
-        setError("No valid coordinates found in the encoded polyline.");
-        setIsLoading(false);
-        return;
+      if (normalizedInput.type === "url") {
+        const extracted = await extractPolylineFromURL(normalizedInput.value);
+        if (!extracted.success) {
+          throw new Error(
+            extracted.error || "Failed to extract polyline from URL."
+          );
+        }
+
+        polylineToDecode = extracted.encodedPolyline;
+        resolvedApiResponse = extracted.response || null;
+        resolvedRouteSegments = extracted.routeSegments || [];
+        resolvedSegmentInfo = { type: "overall", legIndex: null, stepIndex: null };
+        if (inputMethod === "url") {
+          setApiResponse(resolvedApiResponse);
+          setRouteSegments(resolvedRouteSegments);
+          setSelectedSegment(resolvedSegmentInfo);
+          setUrlPolyline(extracted.encodedPolyline);
+        } else if (inputMethod === "direct") {
+          setDirectPolyline(extracted.encodedPolyline);
+        }
+      }
+
+      // Decode the polyline
+      const coordinates = validateCoordinates(
+        decodePolyline(polylineToDecode, precisionToUse),
+        { minPoints: outputType === "polygon" ? 3 : 2 }
+      );
+
+      if (precisionToUse !== precision) {
+        setPrecision(precisionToUse);
       }
 
       // Create GeoJSON based on the output type
@@ -158,43 +226,39 @@ export default function PolylineConverter({ onConversionComplete }) {
       if (outputType === "polygon") {
         geojson = polylineToPolygon(coordinates);
       } else {
-        geojson = polylineToGeoJSON(encodedPolyline, precision);
+        geojson = coordinatesToGeoJSON(coordinates);
       }
 
       // Prepare metadata based on selected segment
       let metadata = null;
-      if (apiResponse) {
-        if (selectedSegment.type === "overall") {
+      if (resolvedApiResponse) {
+        if (resolvedSegmentInfo.type === "overall") {
           metadata = {
-            distance: apiResponse.routes?.[0]?.distance,
-            duration: apiResponse.routes?.[0]?.duration,
-            waypoints: apiResponse.waypoints?.length || 0,
+            distance: resolvedApiResponse.routes?.[0]?.distance,
+            duration: resolvedApiResponse.routes?.[0]?.duration,
+            waypoints: resolvedApiResponse.waypoints?.length || 0,
           };
         } else if (
-          selectedSegment.type === "leg" &&
-          selectedSegment.legIndex !== null
+          resolvedSegmentInfo.type === "leg" &&
+          resolvedSegmentInfo.legIndex !== null
         ) {
-          const leg = routeSegments.find(
-            (s) => s.type === "leg" && s.index === selectedSegment.legIndex
+          const leg = resolvedRouteSegments.find(
+            (s) => s.type === "leg" && s.index === resolvedSegmentInfo.legIndex
           );
           metadata = {
             distance: leg?.distance,
             duration: leg?.duration,
-            segment: `Leg ${selectedSegment.legIndex + 1}: ${
-              leg?.startWaypoint
-            } to ${leg?.endWaypoint}`,
+            segment: `Leg ${resolvedSegmentInfo.legIndex + 1}: ${leg?.startWaypoint} to ${leg?.endWaypoint}`,
           };
-        } else if (selectedSegment.type === "step") {
-          const leg = routeSegments.find(
-            (s) => s.type === "leg" && s.index === selectedSegment.legIndex
+        } else if (resolvedSegmentInfo.type === "step") {
+          const leg = resolvedRouteSegments.find(
+            (s) => s.type === "leg" && s.index === resolvedSegmentInfo.legIndex
           );
-          const step = leg?.steps?.[selectedSegment.stepIndex];
+          const step = leg?.steps?.[resolvedSegmentInfo.stepIndex];
           metadata = {
             distance: step?.distance,
             duration: step?.duration,
-            segment: `Step ${selectedSegment.stepIndex + 1} (${
-              step?.name || "Unnamed"
-            })`,
+            segment: `Step ${resolvedSegmentInfo.stepIndex + 1} (${step?.name || "Unnamed"})`,
           };
         }
       }
@@ -203,12 +267,12 @@ export default function PolylineConverter({ onConversionComplete }) {
       if (onConversionComplete) {
         onConversionComplete({
           success: true,
-          encodedPolyline,
+          encodedPolyline: polylineToDecode,
           coordinates,
           geojson,
           outputType,
           metadata,
-          segmentInfo: selectedSegment,
+          segmentInfo: resolvedSegmentInfo,
         });
       }
     } catch (err) {
@@ -216,17 +280,24 @@ export default function PolylineConverter({ onConversionComplete }) {
       if (onConversionComplete) {
         onConversionComplete({ success: false, error: err.message });
       }
+    } finally {
+      setIsLoading(false);
     }
-
-    setIsLoading(false);
   };
 
   const handleClearInput = () => {
     if (inputMethod === "direct") {
-      setEncodedPolyline("");
+      setDirectPolyline("");
     } else if (inputMethod === "url") {
       setOsrmUrl("");
+      setUrlPolyline("");
+    } else if (inputMethod === "file") {
+      setFilePolyline("");
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
     }
+    setUploadedFileName("");
     setApiResponse(null);
     setRouteSegments([]);
     setSelectedSegment({ type: "overall", legIndex: null, stepIndex: null });
@@ -235,6 +306,14 @@ export default function PolylineConverter({ onConversionComplete }) {
       onConversionComplete(null);
     }
   };
+
+  const canDecode = Boolean(
+    (inputMethod === "direct" && directPolyline.trim()) ||
+      (inputMethod === "url" && urlPolyline.trim() && apiResponse) ||
+      (inputMethod === "file" &&
+        uploadedFileName &&
+        filePolyline.trim())
+  );
 
   return (
     <div className="card">
@@ -289,12 +368,12 @@ export default function PolylineConverter({ onConversionComplete }) {
           <div className="relative">
             <textarea
               ref={textareaRef}
-              value={encodedPolyline}
+              value={directPolyline}
               onChange={handleInputChange}
               placeholder="Paste encoded polyline string here..."
               className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 min-h-[120px]"
             />
-            {encodedPolyline && (
+            {directPolyline && (
               <button
                 className="absolute top-3 right-3 text-gray-400 hover:text-gray-600"
                 onClick={handleClearInput}
@@ -458,7 +537,7 @@ export default function PolylineConverter({ onConversionComplete }) {
             </div>
           )}
 
-          {encodedPolyline && apiResponse && !routeSegments.length && (
+          {urlPolyline && apiResponse && !routeSegments.length && (
             <div className="mt-3 text-sm text-green-600">
               <i className="fas fa-check-circle mr-1"></i>
               Polyline extracted successfully
@@ -509,10 +588,10 @@ export default function PolylineConverter({ onConversionComplete }) {
             </label>
           </div>
 
-          {encodedPolyline && (
+          {uploadedFileName && (
             <div className="mt-3 text-sm text-green-600">
               <i className="fas fa-check-circle mr-1"></i>
-              File loaded successfully
+              File loaded successfully: {uploadedFileName}
             </div>
           )}
         </div>
@@ -556,9 +635,9 @@ export default function PolylineConverter({ onConversionComplete }) {
 
       <button
         onClick={handleDecode}
-        disabled={isLoading || !encodedPolyline.trim()}
+        disabled={isLoading || !canDecode}
         className={`mt-4 w-full py-3 px-4 rounded-md font-medium flex items-center justify-center ${
-          isLoading || !encodedPolyline.trim()
+          isLoading || !canDecode
             ? "bg-gray-300 text-gray-500 cursor-not-allowed"
             : "btn btn-primary"
         }`}
