@@ -1,12 +1,10 @@
 "use client";
 
-import { useState } from "react";
 import dynamic from "next/dynamic";
 import FileUploader from "../components/FileUploader.js";
 import DashboardHeader from "../components/DashboardHeader";
-import "leaflet/dist/leaflet.css";
+import { useValidatorStore } from "../utils/validatorStore";
 
-// Import Map component dynamically to avoid SSR errors
 const Validator = dynamic(() => import("../components/Validator"), {
   ssr: false,
   loading: () => (
@@ -19,20 +17,10 @@ const Validator = dynamic(() => import("../components/Validator"), {
   ),
 });
 
-// DirectMultiPolygonMap is also loaded dynamically
-const DirectMultiPolygonMap = dynamic(
-  () => import("../components/DirectMultiPolygonMap"),
-  {
-    ssr: false,
-  }
-);
-
 export default function Home() {
-  const [validationResult, setValidationResult] = useState(null);
+  const validationResult = useValidatorStore((s) => s.validationResult);
 
-  const handleValidationComplete = (result) => {
-    setValidationResult(result);
-    // Use a larger offset to ensure header doesn't cover content
+  const handleValidationComplete = () => {
     setTimeout(() => {
       const element = document.getElementById("validation-result");
       if (element) {
@@ -84,9 +72,7 @@ export default function Home() {
 
         <div className="dashboard-content">
           <div id="validation-result">
-            {validationResult && (
-              <Validator validationResult={validationResult} />
-            )}
+            {validationResult && <Validator />}
 
             {!validationResult && (
               <div className="flex items-center justify-center h-96 bg-white rounded-lg shadow-md">

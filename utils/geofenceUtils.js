@@ -1,14 +1,33 @@
 import * as turf from "@turf/turf";
 
-// Basic GeoJSON validation function
-function isValidGeoJSON(geojson) {
-  // Check if geojson is an object
-  if (!geojson || typeof geojson !== "object") {
-    return { valid: false, error: "GeoJSON must be an object." };
-  }
+const ISSUE = {
+  INVALID_GEOJSON: "invalid-geojson",
+  INVALID_CRS: "invalid-crs",
+  Z_COORDINATES: "z-coordinates",
+  MULTIPLE_POLYGONS: "multiple-polygons",
+  POLYGON_HOLES: "polygon-holes",
+};
 
-  // Check GeoJSON type
-  const validTypes = [
+const FIX = {
+  REMOVE_Z: "removeZ",
+  PICK_LARGEST: "pickLargestPolygon",
+  REMOVE_HOLES: "removeHoles",
+};
+
+const FIX_ORDER = [FIX.REMOVE_Z, FIX.PICK_LARGEST, FIX.REMOVE_HOLES];
+
+export const ISSUE_TYPES = ISSUE;
+export const FIX_IDS = FIX;
+
+function isPlainObject(v) {
+  return v && typeof v === "object" && !Array.isArray(v);
+}
+
+function basicValidate(geojson) {
+  if (!isPlainObject(geojson)) {
+    return "GeoJSON must be an object.";
+  }
+  const valid = [
     "FeatureCollection",
     "Feature",
     "Point",
@@ -19,739 +38,314 @@ function isValidGeoJSON(geojson) {
     "MultiPolygon",
     "GeometryCollection",
   ];
+  if (!valid.includes(geojson.type)) {
+    return `GeoJSON type "${geojson.type}" is not valid.`;
+  }
+  if (geojson.type === "FeatureCollection" && !Array.isArray(geojson.features)) {
+    return 'FeatureCollection must have a "features" array.';
+  }
+  if (geojson.type === "Feature" && !geojson.geometry) {
+    return 'Feature must have a "geometry" property.';
+  }
+  return null;
+}
 
+function walkCoordinates(coords, visit) {
+  if (!Array.isArray(coords) || coords.length === 0) return;
+  if (typeof coords[0] === "number") {
+    visit(coords);
+    return;
+  }
+  for (const c of coords) walkCoordinates(c, visit);
+}
+
+function forEachGeometry(geojson, visit) {
+  if (!geojson || typeof geojson !== "object") return;
   if (geojson.type === "FeatureCollection") {
-    if (!Array.isArray(geojson.features)) {
-      return {
-        valid: false,
-        error: 'FeatureCollection must have a "features" array.',
-      };
-    }
+    (geojson.features || []).forEach((f) => forEachGeometry(f, visit));
   } else if (geojson.type === "Feature") {
-    if (!geojson.geometry) {
-      return {
-        valid: false,
-        error: 'Feature must have a "geometry" property.',
-      };
-    }
-  } else if (!validTypes.includes(geojson.type)) {
-    return {
-      valid: false,
-      error: `GeoJSON type "${geojson.type}" is not valid.`,
-    };
+    if (geojson.geometry) forEachGeometry(geojson.geometry, visit);
+  } else if (geojson.type === "GeometryCollection") {
+    (geojson.geometries || []).forEach((g) => forEachGeometry(g, visit));
+  } else if (geojson.type) {
+    visit(geojson);
   }
-
-  return { valid: true };
 }
 
-export function validateGeofence(geojson) {
-  // Add console log for debugging
-  console.log("Starting validation for:", geojson.name || "GeoJSON file");
+function collectPolygons(geojson) {
+  const polygons = [];
+  forEachGeometry(geojson, (geom) => {
+    if (geom.type === "Polygon") {
+      polygons.push({ coordinates: geom.coordinates });
+    } else if (geom.type === "MultiPolygon") {
+      for (const polyCoords of geom.coordinates || []) {
+        polygons.push({ coordinates: polyCoords });
+      }
+    }
+  });
+  return polygons;
+}
 
-  const result = {
-    isValid: true,
-    originalGeojson: geojson,
-    modifiedGeojson: null,
-    errors: [],
-    warnings: [],
-    fixes: {},
-  };
-
-  // Basic validation first
-  if (!geojson || typeof geojson !== "object") {
-    result.isValid = false;
-    result.errors.push(
-      "Invalid GeoJSON: Data is incomplete or not a valid object"
-    );
-    return result;
-  }
-
-  // Basic GeoJSON format validation
-  const basicValidation = isValidGeoJSON(geojson);
-  if (!basicValidation.valid) {
-    result.isValid = false;
-    result.errors.push("Invalid GeoJSON: " + basicValidation.error);
-    return result;
-  }
-
+function safeArea(coords) {
   try {
-    // 2. Check coordinate system (must be lat/lon)
-    // In GeoJSON, coordinates are always in [longitude, latitude] format
-    const hasInvalidCoords = checkCoordinateSystem(geojson);
-    if (hasInvalidCoords) {
-      result.isValid = false;
-      result.errors.push(
-        "Invalid CRS: Please change your coordinate system using QGIS or other GIS applications"
-      );
-    }
-
-    // 3. Check z-coordinates
-    const hasZCoordinates = checkZCoordinates(geojson);
-    if (hasZCoordinates) {
-      result.warnings.push(
-        "Geofence has z-coordinates. This can cause compatibility issues."
-      );
-      result.fixes.removeZCoordinates = {
-        description: "Remove z-coordinates",
-        apply: () => removeZCoordinates(geojson),
-      };
-    }
-
-    // 4. Check MultiPolygon type, multiple polygons, and rings
-    const geometryInfo = checkGeometryType(geojson);
-
-    if (geometryInfo.isMultiPolygon) {
-      result.warnings.push(
-        "Geofence has MultiPolygon type. It is recommended to use a single Polygon type."
-      );
-
-      // Add information about the number of rings if any
-      if (geometryInfo.rings && geometryInfo.rings.length > 0) {
-        // Count exterior and interior rings
-        const exteriorCount =
-          geometryInfo.rings.filter((r) => r && r.isExterior).length || 0;
-        const interiorCount =
-          geometryInfo.rings.filter((r) => r && r.isInterior).length || 0;
-
-        result.warnings.push(
-          `Found ${geometryInfo.rings.length} rings (${exteriorCount} exterior, ${interiorCount} interior/holes).`
-        );
-
-        // Display debugging for rings
-        console.log("Rings extracted:", geometryInfo.rings.length);
-        geometryInfo.rings.forEach((r, i) => {
-          if (r) {
-            console.log(
-              `Ring ${i}: ${r.isExterior ? "Exterior" : "Interior"}, ${
-                r.coordinates ? r.coordinates.length : 0
-              } points`
-            );
-          }
-        });
-
-        // Add fix option for converting to single ring
-        result.fixes.convertToSingleRing = {
-          description: "Convert to Polygon with single ring",
-          rings: geometryInfo.rings,
-          apply: (selectedRingIndex) =>
-            convertToSingleRing(geojson, selectedRingIndex),
-        };
-      }
-    } else if (geometryInfo.polygons && geometryInfo.polygons.length > 1) {
-      result.warnings.push(
-        `Geofence has ${geometryInfo.polygons.length} polygons. It is recommended to use only one polygon.`
-      );
-      result.fixes.selectPolygon = {
-        description: "Select one polygon",
-        polygons: geometryInfo.polygons,
-        apply: (selectedIndex) => selectSinglePolygon(geojson, selectedIndex),
-      };
-    } else if (geometryInfo.rings && geometryInfo.rings.length > 1) {
-      // If type is already Polygon but still has multiple rings
-      const exteriorCount =
-        geometryInfo.rings.filter((r) => r && r.isExterior).length || 0;
-      const interiorCount =
-        geometryInfo.rings.filter((r) => r && r.isInterior).length || 0;
-
-      result.warnings.push(
-        `Geofence has ${geometryInfo.rings.length} rings (${exteriorCount} exterior, ${interiorCount} interior/holes).`
-      );
-
-      result.fixes.convertToSingleRing = {
-        description: "Convert to Polygon with single ring",
-        rings: geometryInfo.rings,
-        apply: (selectedRingIndex) =>
-          convertToSingleRing(geojson, selectedRingIndex),
-      };
-    }
-
-    // Manual extraction for multipolygon if normal detection fails
-    if (!result.fixes.convertToSingleRing) {
-      // Check if there's a feature with MultiPolygon type
-      const feature = geojson.features && geojson.features[0];
-      if (
-        feature &&
-        feature.geometry &&
-        feature.geometry.type === "MultiPolygon"
-      ) {
-        const coordinates = feature.geometry.coordinates;
-        if (coordinates && coordinates.length > 0) {
-          // Extract rings from the first polygon if not already done
-          const firstPolygon = coordinates[0];
-          if (Array.isArray(firstPolygon) && firstPolygon.length > 0) {
-            console.log(
-              "Manual extraction: found polygon with",
-              firstPolygon.length,
-              "rings"
-            );
-
-            const manualRings = firstPolygon.map((ring, ringIndex) => ({
-              polygonIndex: 0,
-              ringIndex,
-              coordinates: ring,
-              numPoints: ring.length,
-              isExterior: ringIndex === 0,
-              isInterior: ringIndex > 0,
-            }));
-
-            // Debug to see extracted rings
-            manualRings.forEach((r, i) => {
-              console.log(
-                `Manual Ring ${i}: ${r.isExterior ? "Exterior" : "Interior"}, ${
-                  r.coordinates.length
-                } points`
-              );
-            });
-
-            if (manualRings.length > 0) {
-              result.warnings.push(
-                `Geofence has MultiPolygon type with ${manualRings.length} rings. It is recommended to convert to a single Polygon.`
-              );
-
-              result.fixes.convertToSingleRing = {
-                description: "Convert to Polygon with single ring",
-                rings: manualRings,
-                apply: (selectedRingIndex) =>
-                  convertToSingleRing(geojson, selectedRingIndex),
-              };
-            }
-          }
-        }
-      }
-    }
-  } catch (error) {
-    // Catch unexpected errors during validation
-    console.error("Error during validation:", error);
-    result.isValid = false;
-    result.errors.push(`Error during validation: ${error.message}`);
-  }
-
-  console.log(
-    "Validation result:",
-    result.warnings.length,
-    "warnings,",
-    result.errors.length,
-    "errors,",
-    Object.keys(result.fixes).length,
-    "fixes available"
-  );
-
-  return result;
-}
-
-function checkCoordinateSystem(geojson) {
-  // Check if coordinates are within latitude/longitude range
-  let hasInvalidCoords = false;
-
-  const checkCoords = (coords) => {
-    for (const coord of coords) {
-      if (Array.isArray(coord[0])) {
-        // Nested arrays (polygons, etc)
-        checkCoords(coord);
-      } else {
-        // Individual coordinate
-        const lon = coord[0];
-        const lat = coord[1];
-
-        // Longitude must be in range -180 to 180
-        // Latitude must be in range -90 to 90
-        if (lon < -180 || lon > 180 || lat < -90 || lat > 90) {
-          hasInvalidCoords = true;
-          return;
-        }
-      }
-    }
-  };
-
-  // Check all features if this is a FeatureCollection
-  if (geojson.type === "FeatureCollection") {
-    for (const feature of geojson.features) {
-      if (feature.geometry && feature.geometry.coordinates) {
-        checkCoords(feature.geometry.coordinates);
-      }
-    }
-  }
-  // Check single feature
-  else if (geojson.type === "Feature") {
-    if (geojson.geometry && geojson.geometry.coordinates) {
-      checkCoords(geojson.geometry.coordinates);
-    }
-  }
-  // Check geometry directly
-  else if (geojson.coordinates) {
-    checkCoords(geojson.coordinates);
-  }
-
-  return hasInvalidCoords;
-}
-
-function checkZCoordinates(geojson) {
-  let hasZCoords = false;
-
-  const checkCoords = (coords) => {
-    for (const coord of coords) {
-      if (Array.isArray(coord[0])) {
-        // Nested arrays (polygons, etc)
-        checkCoords(coord);
-      } else {
-        // Individual coordinate
-        if (coord.length > 2) {
-          hasZCoords = true;
-          return;
-        }
-      }
-    }
-  };
-
-  // Check all features if it's a FeatureCollection
-  if (geojson.type === "FeatureCollection") {
-    for (const feature of geojson.features) {
-      if (feature.geometry && feature.geometry.coordinates) {
-        checkCoords(feature.geometry.coordinates);
-      }
-    }
-  }
-  // Check single feature
-  else if (geojson.type === "Feature") {
-    if (geojson.geometry && geojson.geometry.coordinates) {
-      checkCoords(geojson.geometry.coordinates);
-    }
-  }
-  // Check geometry directly
-  else if (geojson.coordinates) {
-    checkCoords(geojson.coordinates);
-  }
-
-  return hasZCoords;
-}
-
-function removeZCoordinates(geojson) {
-  const newGeojson = JSON.parse(JSON.stringify(geojson)); // Deep clone
-
-  const processCoords = (coords) => {
-    for (let i = 0; i < coords.length; i++) {
-      if (Array.isArray(coords[i][0])) {
-        // Nested arrays (polygons, etc)
-        processCoords(coords[i]);
-      } else {
-        // Individual coordinate
-        if (coords[i].length > 2) {
-          coords[i] = [coords[i][0], coords[i][1]]; // Keep only lon/lat
-        }
-      }
-    }
-  };
-
-  // Process all features if it's a FeatureCollection
-  if (newGeojson.type === "FeatureCollection") {
-    for (const feature of newGeojson.features) {
-      if (feature.geometry && feature.geometry.coordinates) {
-        processCoords(feature.geometry.coordinates);
-      }
-    }
-  }
-  // Process single feature
-  else if (newGeojson.type === "Feature") {
-    if (newGeojson.geometry && newGeojson.geometry.coordinates) {
-      processCoords(newGeojson.geometry.coordinates);
-    }
-  }
-  // Process geometry directly
-  else if (newGeojson.coordinates) {
-    processCoords(newGeojson.coordinates);
-  }
-
-  // Ensure standard format
-  return ensureStandardFormat(newGeojson);
-}
-
-function checkGeometryType(geojson) {
-  const result = {
-    isMultiPolygon: false,
-    polygons: [],
-    rings: [],
-  };
-
-  // Function to extract polygons
-  const extractPolygons = (geometry) => {
-    if (!geometry || !geometry.type) return;
-
-    if (geometry.type === "MultiPolygon") {
-      result.isMultiPolygon = true;
-      // Each element in a MultiPolygon is a Polygon
-      geometry.coordinates.forEach((polygonCoords, index) => {
-        result.polygons.push({
-          index,
-          coordinates: polygonCoords,
-          area: calculateArea(polygonCoords),
-        });
-
-        // Extract rings from this polygon
-        if (Array.isArray(polygonCoords) && polygonCoords.length > 0) {
-          polygonCoords.forEach((ring, ringIndex) => {
-            result.rings.push({
-              polygonIndex: index,
-              ringIndex: result.rings.length,
-              coordinates: ring,
-              isExterior: ringIndex === 0,
-              isInterior: ringIndex > 0,
-            });
-          });
-        }
-      });
-    } else if (geometry.type === "Polygon") {
-      // A Polygon might have multiple rings (first is outer, rest are holes)
-      // We treat the whole polygon as one entity
-      result.polygons.push({
-        index: 0,
-        coordinates: geometry.coordinates,
-        area: calculateArea(geometry.coordinates),
-      });
-
-      // Extract rings from this polygon
-      if (
-        Array.isArray(geometry.coordinates) &&
-        geometry.coordinates.length > 0
-      ) {
-        geometry.coordinates.forEach((ring, ringIndex) => {
-          result.rings.push({
-            polygonIndex: 0,
-            ringIndex: result.rings.length,
-            coordinates: ring,
-            isExterior: ringIndex === 0,
-            isInterior: ringIndex > 0,
-          });
-        });
-      }
-    } else if (geometry.type === "GeometryCollection") {
-      geometry.geometries.forEach((g) => extractPolygons(g));
-    }
-  };
-
-  // Check features in a collection
-  if (geojson.type === "FeatureCollection") {
-    geojson.features.forEach((feature) => {
-      if (feature.geometry) {
-        extractPolygons(feature.geometry);
-      }
-    });
-  }
-  // Check single feature
-  else if (geojson.type === "Feature") {
-    if (geojson.geometry) {
-      extractPolygons(geojson.geometry);
-    }
-  }
-  // Check geometry directly
-  else if (geojson.type) {
-    extractPolygons(geojson);
-  }
-
-  return result;
-}
-
-function calculateArea(polygonCoords) {
-  try {
-    // Create a GeoJSON polygon
-    const polygon = {
-      type: "Polygon",
-      coordinates: polygonCoords,
-    };
-
-    // Calculate area using turf.js
-    const area = turf.area(polygon);
-    return area;
-  } catch (error) {
-    console.error("Error calculating area:", error);
+    return turf.area({ type: "Polygon", coordinates: coords });
+  } catch {
     return 0;
   }
 }
 
-// Function to ensure standard GeoJSON format
-function ensureStandardFormat(geojson) {
-  // Desired standard format:
-  // {
-  //   "type": "FeatureCollection",
-  //   "features": [{
-  //     "type": "Feature",
-  //     "properties": {},
-  //     "geometry": {
-  //       "type": "Polygon",
-  //       "coordinates": [[[lon,lat]]]
-  //     }
-  //   }]
-  // }
-
-  // Copy properties if available
-  let properties = {};
-
-  // Extract properties from existing GeoJSON
-  if (
-    geojson.type === "FeatureCollection" &&
-    geojson.features &&
-    geojson.features.length > 0
-  ) {
-    properties = geojson.features[0].properties || {};
-  } else if (geojson.type === "Feature") {
-    properties = geojson.properties || {};
-  }
-
-  // Find polygon coordinates
-  let polygonCoordinates = null;
-
-  // Extract coordinates from the first polygon we can find
-  if (
-    geojson.type === "FeatureCollection" &&
-    geojson.features &&
-    geojson.features.length > 0
-  ) {
-    const feature = geojson.features[0];
-    if (feature.geometry) {
-      if (feature.geometry.type === "Polygon") {
-        polygonCoordinates = feature.geometry.coordinates;
-      } else if (
-        feature.geometry.type === "MultiPolygon" &&
-        feature.geometry.coordinates.length > 0
-      ) {
-        polygonCoordinates = feature.geometry.coordinates[0]; // Use first polygon
-      }
-    }
-  } else if (geojson.type === "Feature" && geojson.geometry) {
-    if (geojson.geometry.type === "Polygon") {
-      polygonCoordinates = geojson.geometry.coordinates;
-    } else if (
-      geojson.geometry.type === "MultiPolygon" &&
-      geojson.geometry.coordinates.length > 0
-    ) {
-      polygonCoordinates = geojson.geometry.coordinates[0];
-    }
-  } else if (geojson.type === "Polygon") {
-    polygonCoordinates = geojson.coordinates;
-  } else if (
-    geojson.type === "MultiPolygon" &&
-    geojson.coordinates &&
-    geojson.coordinates.length > 0
-  ) {
-    polygonCoordinates = geojson.coordinates[0];
-  }
-
-  // If no valid coordinates found, return empty polygon
-  if (
-    !polygonCoordinates ||
-    !Array.isArray(polygonCoordinates) ||
-    polygonCoordinates.length === 0
-  ) {
-    return {
-      type: "FeatureCollection",
-      features: [
-        {
-          type: "Feature",
-          properties: properties,
-          geometry: {
-            type: "Polygon",
-            coordinates: [[]],
-          },
-        },
-      ],
-    };
-  }
-
-  // Return standardized GeoJSON
-  return {
-    type: "FeatureCollection",
-    features: [
-      {
-        type: "Feature",
-        properties: properties,
-        geometry: {
-          type: "Polygon",
-          coordinates: polygonCoordinates,
-        },
-      },
-    ],
-  };
-}
-
-// Function to convert to desired format with only 1 ring (exterior)
-function convertToSingleRing(geojson, selectedRingIndex) {
-  console.log("convertToSingleRing called with ring index:", selectedRingIndex);
-
-  // Deep clone to avoid modifying the original object
-  const newGeojson = JSON.parse(JSON.stringify(geojson));
-
-  // Save properties if available
-  let properties = {};
-  if (
-    newGeojson.type === "FeatureCollection" &&
-    newGeojson.features &&
-    newGeojson.features.length > 0
-  ) {
-    properties = newGeojson.features[0].properties || {};
-  } else if (newGeojson.type === "Feature") {
-    properties = newGeojson.properties || {};
-  }
-
-  // Get geometry info to extract rings
-  const geometryInfo = checkGeometryType(geojson);
-  console.log("Geometry info:", {
-    isMultiPolygon: geometryInfo.isMultiPolygon,
-    polygonCount: geometryInfo.polygons.length,
-    ringCount: geometryInfo.rings.length,
+function stripZ(coords) {
+  const out = [];
+  walkCoordinates(coords, (point) => {
+    if (point.length > 2) point.length = 2;
   });
-
-  let selectedRing = null;
-
-  // Try to find the selected ring
-  if (geometryInfo.rings && geometryInfo.rings.length > 0) {
-    // Use the specified ring index or default to the first exterior ring
-    if (
-      selectedRingIndex !== undefined &&
-      selectedRingIndex >= 0 &&
-      selectedRingIndex < geometryInfo.rings.length
-    ) {
-      selectedRing = geometryInfo.rings[selectedRingIndex].coordinates;
-      console.log(
-        `Using selected ring ${selectedRingIndex} with ${selectedRing.length} points`
-      );
-    } else {
-      // Default to first exterior ring if available
-      const exteriorRing = geometryInfo.rings.find((ring) => ring.isExterior);
-      if (exteriorRing) {
-        selectedRing = exteriorRing.coordinates;
-        console.log(
-          `Using first exterior ring with ${selectedRing.length} points`
-        );
-      } else {
-        // Fallback to first ring
-        selectedRing = geometryInfo.rings[0].coordinates;
-        console.log(
-          `Using first available ring with ${selectedRing.length} points`
-        );
-      }
-    }
-  } else {
-    console.warn(
-      "No rings found in geometry info, attempting manual extraction"
-    );
-
-    // Manual extraction for MultiPolygon
-    const feature = newGeojson.features && newGeojson.features[0];
-    if (
-      feature &&
-      feature.geometry &&
-      feature.geometry.type === "MultiPolygon"
-    ) {
-      const coordinates = feature.geometry.coordinates;
-      if (
-        coordinates &&
-        coordinates.length > 0 &&
-        coordinates[0] &&
-        coordinates[0].length > 0
-      ) {
-        selectedRing = coordinates[0][0]; // First ring of first polygon
-        console.log(
-          `Manually extracted ring with ${selectedRing.length} points`
-        );
-      }
-    } else if (
-      feature &&
-      feature.geometry &&
-      feature.geometry.type === "Polygon"
-    ) {
-      const coordinates = feature.geometry.coordinates;
-      if (coordinates && coordinates.length > 0) {
-        selectedRing = coordinates[0]; // First ring
-        console.log(
-          `Manually extracted ring from Polygon with ${selectedRing.length} points`
-        );
-      }
-    }
-  }
-
-  // If no valid ring found, create an empty one
-  if (!selectedRing || !Array.isArray(selectedRing)) {
-    console.warn("No valid ring found, using empty ring");
-    selectedRing = [];
-  }
-
-  // Create standard format output
-  return {
-    type: "FeatureCollection",
-    features: [
-      {
-        type: "Feature",
-        properties: properties,
-        geometry: {
-          type: "Polygon",
-          coordinates: [selectedRing], // Ensure proper nesting for Polygon
-        },
-      },
-    ],
-  };
+  return coords;
 }
 
-function selectSinglePolygon(geojson, selectedIndex) {
-  console.log("selectSinglePolygon called with index:", selectedIndex);
+function hasZ(coords) {
+  let found = false;
+  walkCoordinates(coords, (point) => {
+    if (point.length > 2) found = true;
+  });
+  return found;
+}
 
-  // Get original properties
-  let properties = {};
+function hasOutOfRange(coords) {
+  let bad = false;
+  walkCoordinates(coords, (point) => {
+    const [lon, lat] = point;
+    if (lon < -180 || lon > 180 || lat < -90 || lat > 90) bad = true;
+  });
+  return bad;
+}
+
+function collectAllCoords(geojson) {
+  const all = [];
+  forEachGeometry(geojson, (geom) => {
+    if (geom.coordinates) {
+      walkCoordinates(geom.coordinates, (p) => all.push(p));
+    }
+  });
+  return all;
+}
+
+function getSourceProperties(geojson) {
   if (
     geojson.type === "FeatureCollection" &&
-    geojson.features &&
+    Array.isArray(geojson.features) &&
     geojson.features.length > 0
   ) {
-    properties = geojson.features[0].properties || {};
-  } else if (geojson.type === "Feature") {
-    properties = geojson.properties || {};
+    return geojson.features[0].properties || {};
+  }
+  if (geojson.type === "Feature") {
+    return geojson.properties || {};
+  }
+  return {};
+}
+
+export function validateGeofence(geojson) {
+  const result = {
+    isValid: true,
+    originalGeojson: geojson,
+    errors: [],
+    issues: [],
+    stats: { polygonCount: 0, polygons: [] },
+  };
+
+  const invalid = basicValidate(geojson);
+  if (invalid) {
+    result.isValid = false;
+    result.errors.push(`Invalid GeoJSON: ${invalid}`);
+    return result;
   }
 
-  // Get polygon info
-  const geometryInfo = checkGeometryType(geojson);
-  let selectedPolygonCoords = null;
+  const allCoords = collectAllCoords(geojson);
+  if (allCoords.length === 0) {
+    result.isValid = false;
+    result.errors.push("No coordinates found in GeoJSON.");
+    return result;
+  }
 
-  // Find the selected polygon
-  if (geometryInfo.polygons && geometryInfo.polygons.length > 0) {
-    // Use specified index or default to first
-    const polygonIndex =
-      selectedIndex !== undefined &&
-      selectedIndex >= 0 &&
-      selectedIndex < geometryInfo.polygons.length
-        ? selectedIndex
-        : 0;
-
-    selectedPolygonCoords = geometryInfo.polygons[polygonIndex].coordinates;
-    console.log(
-      `Using polygon ${polygonIndex} with ${selectedPolygonCoords.length} rings`
+  if (hasOutOfRange(allCoords)) {
+    result.isValid = false;
+    result.errors.push(
+      "Invalid CRS: coordinates are outside lat/lon range. Reproject using QGIS or similar tools."
     );
   }
 
-  // If no valid polygon found, create empty one
-  if (!selectedPolygonCoords) {
-    console.warn("No valid polygon found, using empty polygon");
-    selectedPolygonCoords = [[]];
+  if (allCoords.some((p) => p.length > 2)) {
+    result.issues.push({
+      id: ISSUE.Z_COORDINATES,
+      severity: "warning",
+      title: "Z-coordinates detected",
+      description:
+        "Geofence contains z (altitude) values which can cause compatibility issues.",
+      fixId: FIX.REMOVE_Z,
+    });
   }
 
-  // Return standard format
+  const polygons = collectPolygons(geojson);
+  result.stats.polygonCount = polygons.length;
+  result.stats.polygons = polygons.map((p, idx) => ({
+    index: idx,
+    area: safeArea(p.coordinates),
+    ringCount: p.coordinates.length,
+    pointCount: (p.coordinates[0] || []).length,
+  }));
+
+  if (polygons.length > 1) {
+    const largest = result.stats.polygons.reduce((acc, p) =>
+      p.area > acc.area ? p : acc
+    );
+    result.issues.push({
+      id: ISSUE.MULTIPLE_POLYGONS,
+      severity: "warning",
+      title: `${polygons.length} polygons detected`,
+      description: `Only one Polygon is allowed. Largest polygon is #${
+        largest.index + 1
+      } (${(largest.area / 1_000_000).toFixed(2)} km²). Apply fix to keep only the largest.`,
+      fixId: FIX.PICK_LARGEST,
+      metadata: { largestIndex: largest.index },
+    });
+  }
+
+  const polygonWithHoles = polygons.find(
+    (p) => Array.isArray(p.coordinates) && p.coordinates.length > 1
+  );
+  if (polygons.length === 1 && polygonWithHoles) {
+    result.issues.push({
+      id: ISSUE.POLYGON_HOLES,
+      severity: "info",
+      title: "Polygon has holes",
+      description: `Polygon has ${polygonWithHoles.coordinates.length - 1} interior ring(s). Apply fix to remove holes and keep only the exterior ring.`,
+      fixId: FIX.REMOVE_HOLES,
+    });
+  }
+
+  return result;
+}
+
+function fixRemoveZ(geojson) {
+  const clone = JSON.parse(JSON.stringify(geojson));
+  forEachGeometry(clone, (geom) => {
+    if (geom.coordinates) stripZ(geom.coordinates);
+  });
+  return clone;
+}
+
+function fixPickLargestPolygon(geojson) {
+  const polygons = collectPolygons(geojson);
+  if (polygons.length === 0) return geojson;
+
+  let largest = polygons[0];
+  let largestArea = safeArea(largest.coordinates);
+  for (let i = 1; i < polygons.length; i++) {
+    const a = safeArea(polygons[i].coordinates);
+    if (a > largestArea) {
+      largest = polygons[i];
+      largestArea = a;
+    }
+  }
+
   return {
     type: "FeatureCollection",
     features: [
       {
         type: "Feature",
-        properties: properties,
+        properties: getSourceProperties(geojson),
         geometry: {
           type: "Polygon",
-          coordinates: selectedPolygonCoords,
+          coordinates: largest.coordinates,
         },
       },
     ],
   };
 }
 
-// Function to select multiple polygons based on visible layers
+function fixRemoveHoles(geojson) {
+  const clone = JSON.parse(JSON.stringify(geojson));
+  forEachGeometry(clone, (geom) => {
+    if (geom.type === "Polygon" && Array.isArray(geom.coordinates)) {
+      geom.coordinates = [geom.coordinates[0]];
+    } else if (geom.type === "MultiPolygon" && Array.isArray(geom.coordinates)) {
+      geom.coordinates = geom.coordinates.map((poly) => [poly[0]]);
+    }
+  });
+  return clone;
+}
+
+const FIX_REGISTRY = {
+  [FIX.REMOVE_Z]: fixRemoveZ,
+  [FIX.PICK_LARGEST]: fixPickLargestPolygon,
+  [FIX.REMOVE_HOLES]: fixRemoveHoles,
+};
+
+export function applyFixes(geojson, fixIds) {
+  if (!Array.isArray(fixIds) || fixIds.length === 0) return geojson;
+  const ordered = FIX_ORDER.filter((id) => fixIds.includes(id));
+  let current = geojson;
+  for (const id of ordered) {
+    const fn = FIX_REGISTRY[id];
+    if (fn) current = fn(current);
+  }
+  return ensureStandardFormat(current);
+}
+
+export function ensureStandardFormat(geojson) {
+  if (!geojson || typeof geojson !== "object") return geojson;
+
+  if (
+    geojson.type === "FeatureCollection" &&
+    Array.isArray(geojson.features) &&
+    geojson.features.length === 1 &&
+    geojson.features[0].geometry?.type === "Polygon"
+  ) {
+    return geojson;
+  }
+
+  const polygons = collectPolygons(geojson);
+  if (polygons.length === 0) return geojson;
+
+  const target =
+    polygons.length === 1
+      ? polygons[0]
+      : polygons.reduce((a, b) =>
+          safeArea(b.coordinates) > safeArea(a.coordinates) ? b : a
+        );
+
+  return {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        properties: getSourceProperties(geojson),
+        geometry: {
+          type: "Polygon",
+          coordinates: target.coordinates,
+        },
+      },
+    ],
+  };
+}
+
 export function selectVisiblePolygons(geojson, visibleLayers) {
-  // Ensure standard format output with the first visible polygon
-  return selectSinglePolygon(
-    geojson,
-    Object.keys(visibleLayers).find((key) => visibleLayers[key])
-  );
+  const polygons = collectPolygons(geojson);
+  const keys = Object.keys(visibleLayers || {}).filter((k) => visibleLayers[k]);
+  if (keys.length === 0 || polygons.length === 0) {
+    return ensureStandardFormat(geojson);
+  }
+  const idx = Math.min(Number(keys[0]) || 0, polygons.length - 1);
+  return {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        properties: getSourceProperties(geojson),
+        geometry: {
+          type: "Polygon",
+          coordinates: polygons[idx].coordinates,
+        },
+      },
+    ],
+  };
 }

@@ -1,10 +1,14 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
+import {
+  useValidatorStore,
+  downloadGeojson,
+} from "../utils/validatorStore";
+import { validateGeofence } from "../utils/geofenceUtils";
 
-// Import DirectMultiPolygonMap secara dinamis
-const DirectMultiPolygonMap = dynamic(() => import("./DirectMultiPolygonMap"), {
+const GeofenceMapView = dynamic(() => import("./GeofenceMapView"), {
   ssr: false,
   loading: () => (
     <div className="h-96 bg-gray-100 flex items-center justify-center">
@@ -16,52 +20,71 @@ const DirectMultiPolygonMap = dynamic(() => import("./DirectMultiPolygonMap"), {
   ),
 });
 
-export default function Validator({ validationResult }) {
-  const [fixedGeojson, setFixedGeojson] = useState(null);
-  const [activeTab, setActiveTab] = useState("warnings");
+export default function Validator() {
+  const validationResult = useValidatorStore((s) => s.validationResult);
+  const originalGeojson = useValidatorStore((s) => s.originalGeojson);
+  const history = useValidatorStore((s) => s.history);
+  const historyIndex = useValidatorStore((s) => s.historyIndex);
+  const sourceFilename = useValidatorStore((s) => s.sourceFilename);
+  const applySelectedFixes = useValidatorStore((s) => s.applySelectedFixes);
+  const undo = useValidatorStore((s) => s.undo);
+  const redo = useValidatorStore((s) => s.redo);
 
-  if (!validationResult) {
-    return null;
-  }
+  const [selectedFixes, setSelectedFixes] = useState(() => new Set());
 
-  const { isValid, errors, warnings, fixes, originalGeojson } =
-    validationResult;
-
-  const handleApplyFix = (fixKey, params = {}) => {
-    if (fixes[fixKey]) {
-      let fixed;
-
-      if (fixKey === "removeZCoordinates") {
-        fixed = fixes.removeZCoordinates.apply();
-      } else if (fixKey === "convertToSingleRing") {
-        // Untuk konversi dari MultiPolygon ke Polygon
-        // Selalu gunakan ring index 0 (exterior ring pertama) secara default
-        fixed = fixes.convertToSingleRing.apply(0);
-        console.log("Converted GeoJSON:", fixed);
-      } else if (fixKey === "selectPolygon") {
-        // Untuk memilih polygon, selalu gunakan polygon pertama
-        fixed = fixes.selectPolygon.apply(0);
-      }
-
-      if (fixed) {
-        setFixedGeojson(fixed);
-        setActiveTab("fixed");
-      }
+  const currentGeojson = useMemo(() => {
+    if (historyIndex >= 0 && history[historyIndex]) {
+      return history[historyIndex].geojson;
     }
+    return originalGeojson;
+  }, [historyIndex, history, originalGeojson]);
+
+  const currentValidation = useMemo(
+    () => (currentGeojson ? validateGeofence(currentGeojson) : null),
+    [currentGeojson]
+  );
+
+  useEffect(() => {
+    setSelectedFixes(new Set());
+  }, [currentGeojson]);
+
+  if (!validationResult || !currentValidation) return null;
+
+  const { errors } = currentValidation;
+  const issues = currentValidation.issues;
+  const stats = currentValidation.stats;
+  const isValid = currentValidation.isValid;
+  const fixableIssues = issues.filter((i) => i.fixId);
+  const nothingWrong = isValid && issues.length === 0;
+  const viewingFixed = historyIndex >= 0;
+  const canUndo = historyIndex >= 0;
+  const canRedo = historyIndex < history.length - 1;
+
+  const toggleFix = (fixId) => {
+    setSelectedFixes((prev) => {
+      const next = new Set(prev);
+      if (next.has(fixId)) next.delete(fixId);
+      else next.add(fixId);
+      return next;
+    });
   };
 
-  const handleDownload = (geojson) => {
-    const jsonString = JSON.stringify(geojson, null, 2);
-    const blob = new Blob([jsonString], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
+  const selectAll = () => {
+    const all = fixableIssues.map((i) => i.fixId);
+    setSelectedFixes(new Set(all));
+  };
 
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "fixed-geofence.geojson";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+  const clearSelection = () => setSelectedFixes(new Set());
+
+  const handleApply = () => {
+    const ids = Array.from(selectedFixes);
+    if (ids.length === 0) return;
+    applySelectedFixes(ids);
+    setSelectedFixes(new Set());
+  };
+
+  const handleDownload = () => {
+    downloadGeojson(currentGeojson, sourceFilename, "fixed");
   };
 
   return (
@@ -70,9 +93,14 @@ export default function Validator({ validationResult }) {
         <h2 className="text-xl font-bold mb-4 flex items-center">
           <i className="fas fa-check-circle mr-2 text-blue-500"></i>
           Validation Results
+          {sourceFilename && (
+            <span className="ml-3 text-sm font-normal text-gray-500">
+              ({sourceFilename})
+            </span>
+          )}
         </h2>
 
-        {isValid && warnings.length === 0 ? (
+        {nothingWrong ? (
           <div className="alert alert-success">
             <i className="fas fa-check-circle mr-2"></i>
             GeoJSON is valid and meets all requirements.
@@ -83,7 +111,7 @@ export default function Validator({ validationResult }) {
               <div className="alert alert-error">
                 <h3 className="font-bold mb-1 flex items-center">
                   <i className="fas fa-exclamation-circle mr-2"></i>
-                  Error:
+                  Errors:
                 </h3>
                 <ul className="list-disc pl-5">
                   {errors.map((error, index) => (
@@ -93,178 +121,154 @@ export default function Validator({ validationResult }) {
               </div>
             )}
 
-            {warnings.length > 0 && (
+            {issues.length > 0 && (
               <div className="alert alert-warning">
                 <h3 className="font-bold mb-1 flex items-center">
                   <i className="fas fa-exclamation-triangle mr-2"></i>
-                  Warning:
+                  Detected issues ({issues.length}):
                 </h3>
                 <ul className="list-disc pl-5">
-                  {warnings.map((warning, index) => (
-                    <li key={`warning-${index}`}>{warning}</li>
+                  {issues.map((w) => (
+                    <li key={`issue-${w.id}`}>
+                      <span className="font-medium">{w.title}</span>
+                      {" — "}
+                      <span className="text-gray-700">{w.description}</span>
+                    </li>
                   ))}
                 </ul>
               </div>
             )}
           </div>
         )}
+
+        {stats?.polygonCount > 1 && (
+          <div className="mt-4 text-xs text-gray-500">
+            Polygon stats:{" "}
+            {stats.polygons
+              .map(
+                (p, i) =>
+                  `#${i + 1}: ${(p.area / 1_000_000).toFixed(2)} km² (${p.pointCount} pts)`
+              )
+              .join(" · ")}
+          </div>
+        )}
       </div>
 
-      {/* Tab untuk navigasi */}
-      {(warnings.length > 0 || fixedGeojson) && (
-        <div className="border-b">
-          <div className="flex">
-            <button
-              onClick={() => setActiveTab("warnings")}
-              className={`py-3 px-6 font-medium ${
-                activeTab === "warnings"
-                  ? "border-b-2 border-blue-500 text-blue-600"
-                  : "text-gray-500 hover:text-gray-700"
-              }`}
-            >
-              <i
-                className={`fas fa-tools mr-2 ${
-                  activeTab === "warnings" ? "text-blue-500" : ""
-                }`}
-              ></i>
-              Fix Issues
-            </button>
-            {fixedGeojson && (
-              <button
-                onClick={() => setActiveTab("fixed")}
-                className={`py-3 px-6 font-medium ${
-                  activeTab === "fixed"
-                    ? "border-b-2 border-blue-500 text-blue-600"
-                    : "text-gray-500 hover:text-gray-700"
-                }`}
-              >
-                <i
-                  className={`fas fa-check mr-2 ${
-                    activeTab === "fixed" ? "text-blue-500" : ""
-                  }`}
-                ></i>
-                Fixed Result
-              </button>
-            )}
-          </div>
+      <div className="p-6 space-y-6">
+        <div>
+          <h3 className="font-medium text-gray-700 mb-2">
+            {viewingFixed ? "Fixed GeoJSON" : "Original GeoJSON"}
+          </h3>
+          <GeofenceMapView geojson={currentGeojson} />
         </div>
-      )}
 
-      {/* Konten tab */}
-      <div className="p-6">
-        {activeTab === "warnings" && warnings.length > 0 && (
-          <div className="space-y-6">
-            <h3 className="font-bold text-lg flex items-center mb-4">
-              <i className="fas fa-wrench mr-2 text-yellow-500"></i>
-              Fix Options:
-            </h3>
-
-            {/* Original GeoJSON Visualization */}
-            <div className="mb-6">
-              <h4 className="font-medium text-gray-700 mb-2">
-                Original GeoJSON:
-              </h4>
-              <DirectMultiPolygonMap geojson={originalGeojson} />
+        {fixableIssues.length > 0 && (
+          <div className="border rounded-lg p-4 bg-gray-50">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="font-bold flex items-center">
+                <i className="fas fa-wrench mr-2 text-yellow-500"></i>
+                Fix options
+              </h3>
+              <div className="flex gap-2 text-xs">
+                <button
+                  onClick={selectAll}
+                  className="text-blue-600 hover:underline"
+                >
+                  Select all
+                </button>
+                <span className="text-gray-400">|</span>
+                <button
+                  onClick={clearSelection}
+                  className="text-gray-600 hover:underline"
+                >
+                  Clear
+                </button>
+              </div>
             </div>
 
-            {/* Option for z-coordinates */}
-            {fixes.removeZCoordinates && (
-              <div className="card">
-                <h4 className="card-title flex items-center">
-                  <i className="fas fa-cube mr-2 text-blue-500"></i>
-                  Z-Coordinates Detected
-                </h4>
-                <p className="mb-4 text-gray-600">
-                  Your file has z-coordinates which may cause compatibility
-                  issues.
-                </p>
-                <button
-                  onClick={() => handleApplyFix("removeZCoordinates")}
-                  className="btn btn-primary"
+            <div className="space-y-2">
+              {fixableIssues.map((issue) => (
+                <label
+                  key={issue.fixId}
+                  className="flex items-start p-3 bg-white rounded border border-gray-200 cursor-pointer hover:border-blue-400"
                 >
-                  <i className="fas fa-trash-alt mr-2"></i>
-                  Remove Z-Coordinates
-                </button>
-              </div>
-            )}
+                  <input
+                    type="checkbox"
+                    checked={selectedFixes.has(issue.fixId)}
+                    onChange={() => toggleFix(issue.fixId)}
+                    className="mt-1 mr-3"
+                  />
+                  <div className="flex-1">
+                    <div className="font-medium text-gray-800">
+                      {issue.title}
+                    </div>
+                    <div className="text-sm text-gray-600">
+                      {issue.description}
+                    </div>
+                  </div>
+                </label>
+              ))}
+            </div>
 
-            {/* Option for MultiPolygon */}
-            {fixes.convertToSingleRing && (
-              <div className="card">
-                <h4 className="card-title flex items-center">
-                  <i className="fas fa-object-group mr-2 text-blue-500"></i>
-                  MultiPolygon Detected
-                </h4>
-                <p className="mb-4 text-gray-600">
-                  Your file has a MultiPolygon type. This application requires a
-                  single Polygon format. Click the button below to convert the
-                  MultiPolygon to a standard Polygon.
-                </p>
-                <button
-                  onClick={() => handleApplyFix("convertToSingleRing")}
-                  className="btn btn-primary"
-                >
-                  <i className="fas fa-magic mr-2"></i>
-                  Convert to Single Polygon
-                </button>
-              </div>
-            )}
+            <div className="mt-4 flex flex-wrap gap-2 items-center">
+              <button
+                onClick={handleApply}
+                disabled={selectedFixes.size === 0}
+                className={`btn ${
+                  selectedFixes.size === 0
+                    ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                    : "btn-primary"
+                }`}
+              >
+                <i className="fas fa-magic mr-2"></i>
+                Apply {selectedFixes.size > 0 && `(${selectedFixes.size})`} fix
+                {selectedFixes.size === 1 ? "" : "es"}
+              </button>
 
-            {/* Option for multiple polygons */}
-            {fixes.selectPolygon && !fixes.convertToPolygon && (
-              <div className="card">
-                <h4 className="card-title flex items-center">
-                  <i className="fas fa-shapes mr-2 text-blue-500"></i>
-                  Multiple Polygons Detected
-                </h4>
-                <p className="mb-4 text-gray-600">
-                  Your file has multiple polygons. This application requires a
-                  format with a single polygon. Click the button below to use
-                  the first polygon.
-                </p>
+              <button
+                onClick={undo}
+                disabled={!canUndo}
+                className={`btn btn-outline ${!canUndo ? "opacity-50 cursor-not-allowed" : ""}`}
+              >
+                <i className="fas fa-undo mr-2"></i>
+                Undo
+              </button>
+
+              <button
+                onClick={redo}
+                disabled={!canRedo}
+                className={`btn btn-outline ${!canRedo ? "opacity-50 cursor-not-allowed" : ""}`}
+              >
+                <i className="fas fa-redo mr-2"></i>
+                Redo
+              </button>
+
+              {viewingFixed && (
                 <button
-                  onClick={() => handleApplyFix("selectPolygon")}
-                  className="btn btn-primary"
+                  onClick={handleDownload}
+                  className="btn btn-secondary ml-auto"
                 >
-                  <i className="fas fa-check-circle mr-2"></i>
-                  Convert to Single Polygon
+                  <i className="fas fa-download mr-2"></i>
+                  Download fixed GeoJSON
                 </button>
+              )}
+            </div>
+
+            {history.length > 0 && (
+              <div className="mt-3 text-xs text-gray-500">
+                Fix history: {history.length} step(s)
+                {historyIndex >= 0 && ` · viewing step ${historyIndex + 1}`}
               </div>
             )}
           </div>
         )}
 
-        {activeTab === "fixed" && fixedGeojson && (
-          <div className="space-y-6">
-            <h3 className="font-bold text-lg flex items-center mb-4">
-              <i className="fas fa-check-circle mr-2 text-green-500"></i>
-              Fixed GeoJSON:
-            </h3>
-
-            <div className="mb-6">
-              <DirectMultiPolygonMap geojson={fixedGeojson} />
-            </div>
-
-            <div className="flex justify-between">
-              <button
-                onClick={() => handleDownload(fixedGeojson)}
-                className="btn btn-secondary"
-              >
-                <i className="fas fa-download mr-2"></i>
-                Download GeoJSON
-              </button>
-
-              <button
-                onClick={() => {
-                  setFixedGeojson(null);
-                  setActiveTab("warnings");
-                }}
-                className="btn btn-outline"
-              >
-                <i className="fas fa-arrow-left mr-2"></i>
-                Back to Fix Options
-              </button>
-            </div>
+        {nothingWrong && (
+          <div className="flex justify-end">
+            <button onClick={handleDownload} className="btn btn-secondary">
+              <i className="fas fa-download mr-2"></i>
+              Download GeoJSON
+            </button>
           </div>
         )}
       </div>

@@ -88,16 +88,59 @@
   }
 }
 
-/* Fix for Leaflet */
-.leaflet-container {
-  z-index: 0;
+/* Map container sizing for MapLibre */
+.maplibregl-map {
   height: 100%;
   width: 100%;
 }
 
-.leaflet-control,
-.leaflet-pane {
-  z-index: 400 !important;
+/* Pulsing marker for small polygons flagged as issues */
+.pulse-marker-wrapper {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.pulse-marker-dot {
+  position: relative;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 2px white, 0 1px 3px rgba(0, 0, 0, 0.4);
+  z-index: 2;
+}
+
+.pulse-marker-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.55;
+  animation: pulse-ring 1.4s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+.pulse-marker-ring.delay {
+  animation-delay: 0.7s;
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.6;
+  }
+  80% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
 }
 
 /* Added scroll padding to account for fixed header */

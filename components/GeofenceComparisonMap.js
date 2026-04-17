@@ -1,533 +1,141 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
-  MapContainer,
-  TileLayer,
-  GeoJSON,
-  LayersControl,
-  ZoomControl,
-  useMap,
-  FeatureGroup,
-} from "react-leaflet";
+  Map as MaplibreMap,
+  Source,
+  Layer,
+  NavigationControl,
+  AttributionControl,
+} from "react-map-gl/maplibre";
+import "maplibre-gl/dist/maplibre-gl.css";
 import * as turf from "@turf/turf";
-import dynamic from "next/dynamic";
-const html2canvas = dynamic(() => import("html2canvas"), {
-  ssr: false,
-});
+import {
+  MAP_STYLES,
+  MAP_STYLE_LABELS,
+} from "../utils/mapStyles";
+import { useMapFit } from "../utils/useMapFit";
 
-// Component to fit map bounds
-function MapBounds({ bounds }) {
-  const map = useMap();
+function combinedBounds(a, b) {
+  try {
+    const bbox1 = turf.bbox(a);
+    const bbox2 = turf.bbox(b);
+    return [
+      [Math.min(bbox1[0], bbox2[0]), Math.min(bbox1[1], bbox2[1])],
+      [Math.max(bbox1[2], bbox2[2]), Math.max(bbox1[3], bbox2[3])],
+    ];
+  } catch {
+    return null;
+  }
+}
 
-  useEffect(() => {
-    if (bounds) {
-      map.fitBounds(bounds);
+function extractPolygonFeature(geojson) {
+  if (!geojson) return null;
+  try {
+    if (geojson.type === "FeatureCollection" && geojson.features?.length) {
+      return extractPolygonFeature(geojson.features[0]);
     }
-  }, [bounds, map]);
-
+    if (geojson.type === "Feature") {
+      const g = geojson.geometry;
+      if (!g) return null;
+      if (g.type === "Polygon") return turf.feature(g);
+      if (g.type === "MultiPolygon" && g.coordinates?.length) {
+        return turf.feature({ type: "Polygon", coordinates: g.coordinates[0] });
+      }
+    }
+    if (geojson.type === "Polygon") return turf.feature(geojson);
+    if (geojson.type === "MultiPolygon" && geojson.coordinates?.length) {
+      return turf.feature({ type: "Polygon", coordinates: geojson.coordinates[0] });
+    }
+  } catch {
+    return null;
+  }
   return null;
 }
 
-// Component to handle map legend
-function MapLegend({ labels }) {
-  return (
-    <div className="absolute bottom-8 right-4 bg-white p-3 rounded-lg shadow-md z-50 min-w-[200px]">
-      <h4 className="font-medium text-sm mb-2">Legend</h4>
-      <div className="space-y-2">
-        {labels.map((item, index) => (
-          <div key={`legend-${index}`} className="flex items-center">
-            <div
-              className="w-4 h-4 mr-2 rounded"
-              style={{ backgroundColor: item.color }}
-            ></div>
-            <div className="text-sm">{item.label}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+function computeIntersection(a, b) {
+  try {
+    const result = turf.intersect(a, b);
+    if (result) return result;
+  } catch {}
+  try {
+    if (turf.booleanContains(a, b)) return b;
+    if (turf.booleanContains(b, a)) return a;
+  } catch {}
+  return null;
 }
 
+const STYLES = {
+  a: {
+    fill: "#3388ff",
+    outline: "#1d4ed8",
+  },
+  b: {
+    fill: "#ff7800",
+    outline: "#c2410c",
+  },
+  intersection: {
+    fill: "#8e44ad",
+    outline: "#581c87",
+  },
+};
+
 export default function GeofenceComparisonMap({ comparisonData }) {
-  const [mapBounds, setMapBounds] = useState(null);
-  const [legendItems, setLegendItems] = useState([]);
+  const mapRef = useRef(null);
+  const [styleKey, setStyleKey] = useState("osm");
   const [visibleLayers, setVisibleLayers] = useState({
-    geojson1: true,
-    geojson2: true,
+    a: true,
+    b: true,
     intersection: true,
   });
-  const mapRef = useRef(null);
-  const mapContainerRef = useRef(null);
-  const [intersection, setIntersection] = useState(null);
-  const [intersectionArea, setIntersectionArea] = useState(0);
-  const [geojson1Area, setGeojson1Area] = useState(0);
-  const [geojson2Area, setGeojson2Area] = useState(0);
 
-  // Additional useEffect to update legend when areas change
-  useEffect(() => {
-    if (comparisonData && geojson1Area > 0 && geojson2Area > 0) {
-      setLegendItems([
-        {
-          color: "#3388ff",
-          label: `${comparisonData.file1Name} - ${(
-            geojson1Area / 1000000
-          ).toFixed(2)} km²`,
-        },
-        {
-          color: "#ff7800",
-          label: `${comparisonData.file2Name} - ${(
-            geojson2Area / 1000000
-          ).toFixed(2)} km²`,
-        },
-        {
-          color: "#8e44ad",
-          label: `Intersection - ${(intersectionArea / 1000000).toFixed(
-            2
-          )} km²`,
-        },
-      ]);
+  const { polyA, polyB, intersection, areaA, areaB, areaI } = useMemo(() => {
+    if (!comparisonData?.geojson1 || !comparisonData?.geojson2) {
+      return { polyA: null, polyB: null, intersection: null, areaA: 0, areaB: 0, areaI: 0 };
     }
-  }, [geojson1Area, geojson2Area, intersectionArea, comparisonData]);
-
-  // Calculate bounds and intersection when comparison data changes
-  useEffect(() => {
-    if (
-      !comparisonData ||
-      !comparisonData.geojson1 ||
-      !comparisonData.geojson2
-    ) {
-      return;
-    }
-
-    try {
-      // Calculate bounding box that encompasses both geojsons
-      const bbox1 = turf.bbox(comparisonData.geojson1);
-      const bbox2 = turf.bbox(comparisonData.geojson2);
-
-      const combinedBbox = [
-        Math.min(bbox1[0], bbox2[0]), // min lon
-        Math.min(bbox1[1], bbox2[1]), // min lat
-        Math.max(bbox1[2], bbox2[2]), // max lon
-        Math.max(bbox1[3], bbox2[3]), // max lat
-      ];
-
-      // Convert turf bbox to Leaflet bounds
-      const bounds = [
-        [combinedBbox[1], combinedBbox[0]], // SW corner [lat, lng]
-        [combinedBbox[3], combinedBbox[2]], // NE corner [lat, lng]
-      ];
-
-      setMapBounds(bounds);
-
-      // Calculate intersection between the two geojsons
-      try {
-        // Improved function to extract polygons from various GeoJSON formats
-        const extractPolygon = (geojson) => {
-          console.log("Extracting polygon from:", geojson.type);
-
-          // Helper to create a turf polygon safely
-          const createTurfPolygon = (coordinates) => {
-            if (
-              !coordinates ||
-              !Array.isArray(coordinates) ||
-              coordinates.length === 0
-            ) {
-              console.warn("Invalid coordinates for polygon");
-              return null;
-            }
-
-            try {
-              // Ensure coordinates are in the correct format for turf.js
-              // For Polygon: coordinates should be an array of LinearRings
-              // First ring must be exterior, rest are holes
-              if (
-                Array.isArray(coordinates[0]) &&
-                Array.isArray(coordinates[0][0])
-              ) {
-                // This is properly formatted Polygon coordinates
-                console.log(
-                  "Creating polygon with",
-                  coordinates.length,
-                  "rings"
-                );
-                return turf.polygon(coordinates);
-              } else if (
-                Array.isArray(coordinates[0]) &&
-                typeof coordinates[0][0] === "number"
-              ) {
-                // This is a single LinearRing, needs to be wrapped
-                console.log("Creating polygon from single ring");
-                return turf.polygon([coordinates]);
-              } else {
-                console.warn("Coordinates in unexpected format");
-                return null;
-              }
-            } catch (error) {
-              console.error("Error creating turf polygon:", error);
-              return null;
-            }
-          };
-
-          let polygonCoordinates = null;
-
-          if (geojson.type === "FeatureCollection") {
-            // Get the first feature
-            if (geojson.features && geojson.features.length > 0) {
-              const feature = geojson.features[0];
-              console.log("Feature from collection:", feature.geometry?.type);
-
-              if (feature.geometry) {
-                if (feature.geometry.type === "Polygon") {
-                  polygonCoordinates = feature.geometry.coordinates;
-                } else if (
-                  feature.geometry.type === "MultiPolygon" &&
-                  feature.geometry.coordinates &&
-                  feature.geometry.coordinates.length > 0
-                ) {
-                  // Take first polygon from MultiPolygon
-                  polygonCoordinates = feature.geometry.coordinates[0];
-                  console.log(
-                    "Extracted polygon from MultiPolygon, rings:",
-                    polygonCoordinates.length
-                  );
-                }
-              }
-            }
-          } else if (geojson.type === "Feature") {
-            if (geojson.geometry) {
-              console.log("Feature geometry type:", geojson.geometry.type);
-              if (geojson.geometry.type === "Polygon") {
-                polygonCoordinates = geojson.geometry.coordinates;
-              } else if (
-                geojson.geometry.type === "MultiPolygon" &&
-                geojson.geometry.coordinates &&
-                geojson.geometry.coordinates.length > 0
-              ) {
-                polygonCoordinates = geojson.geometry.coordinates[0];
-              }
-            }
-          } else if (geojson.type === "Polygon") {
-            polygonCoordinates = geojson.coordinates;
-          } else if (geojson.type === "MultiPolygon") {
-            if (geojson.coordinates && geojson.coordinates.length > 0) {
-              polygonCoordinates = geojson.coordinates[0];
-            }
-          }
-
-          // If we found valid coordinates, create a turf polygon
-          if (polygonCoordinates) {
-            console.log("Found polygon coordinates", polygonCoordinates.length);
-            return createTurfPolygon(polygonCoordinates);
-          }
-
-          console.warn("Failed to extract polygon from geojson");
-          return null;
-        };
-
-        // Extract polygons from both geojsons
-        const poly1 = extractPolygon(comparisonData.geojson1);
-        const poly2 = extractPolygon(comparisonData.geojson2);
-
-        console.log("Polygon 1:", poly1 ? "Valid" : "Invalid");
-        console.log("Polygon 2:", poly2 ? "Valid" : "Invalid");
-
-        if (poly1 && poly2) {
-          // Calculate areas first - this is safer
-          const area1 = turf.area(poly1);
-          const area2 = turf.area(poly2);
-
-          setGeojson1Area(area1);
-          setGeojson2Area(area2);
-
-          try {
-            console.log(
-              "Attempting to calculate intersection using turf.intersect"
-            );
-
-            // Make sure poly1 and poly2 are in the expected format for intersect
-            // They need to be GeoJSON features with type 'Feature' and geometry type 'Polygon'
-            const poly1Feature = turf.feature(poly1.geometry);
-            const poly2Feature = turf.feature(poly2.geometry);
-
-            console.log("Polygon 1 geometry type:", poly1.geometry.type);
-            console.log("Polygon 2 geometry type:", poly2.geometry.type);
-
-            // Log more details about the polygon geometries
-            console.log(
-              "Polygon 1 coordinates length:",
-              poly1.geometry.coordinates.length
-            );
-            console.log(
-              "Polygon 2 coordinates length:",
-              poly2.geometry.coordinates.length
-            );
-
-            try {
-              // First try with turf.intersect
-              const intersectionPoly = turf.intersect(
-                poly1Feature,
-                poly2Feature
-              );
-              const intersectArea = intersectionPoly
-                ? turf.area(intersectionPoly)
-                : 0;
-
-              setIntersection(intersectionPoly);
-              setIntersectionArea(intersectArea);
-
-              console.log("Intersection calculated successfully");
-            } catch (intersectError) {
-              console.warn("turf.intersect failed:", intersectError.message);
-
-              // Alternative approach using boolean operations
-              try {
-                console.log("Trying alternative intersection calculation");
-                // Try using turf.booleanOverlap to check if polygons overlap
-                const doesOverlap = turf.booleanOverlap(
-                  poly1Feature,
-                  poly2Feature
-                );
-                const doesContain1 = turf.booleanContains(
-                  poly1Feature,
-                  poly2Feature
-                );
-                const doesContain2 = turf.booleanContains(
-                  poly2Feature,
-                  poly1Feature
-                );
-
-                console.log("Polygons overlap:", doesOverlap);
-                console.log("Polygon 1 contains Polygon 2:", doesContain1);
-                console.log("Polygon 2 contains Polygon 1:", doesContain2);
-
-                if (doesOverlap || doesContain1 || doesContain2) {
-                  // If they overlap or one contains the other, attempt to create intersection
-                  try {
-                    console.log("Creating manual intersection");
-                    // Try using other turf operation to calculate intersection
-                    let intersectionResult;
-
-                    if (doesContain1) {
-                      // If poly1 contains poly2, the intersection is just poly2
-                      intersectionResult = poly2Feature;
-                    } else if (doesContain2) {
-                      // If poly2 contains poly1, the intersection is just poly1
-                      intersectionResult = poly1Feature;
-                    } else {
-                      // Try creating a union and operations
-                      const combined = turf.union(poly1Feature, poly2Feature);
-                      // Calculate the total area and subtract the non-overlapping parts
-                      const combinedArea = turf.area(combined);
-                      const poly1Area = turf.area(poly1Feature);
-                      const poly2Area = turf.area(poly2Feature);
-
-                      // Approximate the intersection area
-                      const estimatedIntersectionArea =
-                        poly1Area + poly2Area - combinedArea;
-
-                      if (estimatedIntersectionArea > 0) {
-                        // Create a simple buffer around the centroid of one polygon to represent the intersection
-                        const centroid = turf.centroid(poly1Feature);
-                        intersectionResult = turf.buffer(
-                          centroid,
-                          Math.sqrt(estimatedIntersectionArea / Math.PI) / 1000,
-                          { units: "kilometers" }
-                        );
-                        console.log(
-                          "Created approximate intersection with area:",
-                          estimatedIntersectionArea
-                        );
-                      } else {
-                        console.log("No significant intersection detected");
-                        intersectionResult = null;
-                      }
-                    }
-
-                    if (intersectionResult) {
-                      const intersectArea = turf.area(intersectionResult);
-                      setIntersection(intersectionResult);
-                      setIntersectionArea(intersectArea);
-
-                      // Update legend immediately after calculating intersection
-                      setLegendItems([
-                        {
-                          color: "#3388ff",
-                          label: `${comparisonData.file1Name} - ${(
-                            area1 / 1000000
-                          ).toFixed(2)} km²`,
-                        },
-                        {
-                          color: "#ff7800",
-                          label: `${comparisonData.file2Name} - ${(
-                            area2 / 1000000
-                          ).toFixed(2)} km²`,
-                        },
-                        {
-                          color: "#8e44ad",
-                          label: `Intersection - ${(
-                            intersectArea / 1000000
-                          ).toFixed(2)} km²`,
-                        },
-                      ]);
-
-                      console.log(
-                        "Alternative intersection calculated with area:",
-                        intersectArea
-                      );
-                    } else {
-                      setIntersection(null);
-                      setIntersectionArea(0);
-                    }
-                  } catch (altIntersectError) {
-                    console.error(
-                      "Alternative intersection calculation failed:",
-                      altIntersectError
-                    );
-                    setIntersection(null);
-                    setIntersectionArea(0);
-                  }
-                } else {
-                  console.log("Polygons do not overlap or contain each other");
-                  setIntersection(null);
-                  setIntersectionArea(0);
-                }
-              } catch (booleanError) {
-                console.error("Boolean operations failed:", booleanError);
-                setIntersection(null);
-                setIntersectionArea(0);
-              }
-            }
-          } catch (intersectError) {
-            console.warn(
-              "Error calculating intersection:",
-              intersectError.message
-            );
-            // Set intersection to null and area to 0 if calculation fails
-            setIntersection(null);
-            setIntersectionArea(0);
-          }
-
-          // Update legend with areas
-          setLegendItems([
-            {
-              color: "#3388ff",
-              label: `${comparisonData.file1Name} - ${(area1 / 1000000).toFixed(
-                2
-              )} km²`,
-            },
-            {
-              color: "#ff7800",
-              label: `${comparisonData.file2Name} - ${(area2 / 1000000).toFixed(
-                2
-              )} km²`,
-            },
-            {
-              color: "#8e44ad",
-              label: `Intersection - ${(intersectionArea / 1000000).toFixed(
-                2
-              )} km²`,
-            },
-          ]);
-        } else {
-          // Set default values if polygons can't be extracted
-          setGeojson1Area(0);
-          setGeojson2Area(0);
-          setIntersectionArea(0);
-          setIntersection(null);
-
-          setLegendItems([
-            {
-              color: "#3388ff",
-              label: `${comparisonData.file1Name} - 0.00 km²`,
-            },
-            {
-              color: "#ff7800",
-              label: `${comparisonData.file2Name} - 0.00 km²`,
-            },
-            { color: "#8e44ad", label: `Intersection - 0.00 km²` },
-          ]);
-
-          console.warn(
-            "Could not calculate intersection: Invalid polygon geometries"
-          );
-        }
-      } catch (error) {
-        console.error("Error processing geojson for comparison:", error);
-      }
-    } catch (error) {
-      console.error("Error calculating combined bounds:", error);
-    }
+    const a = extractPolygonFeature(comparisonData.geojson1);
+    const b = extractPolygonFeature(comparisonData.geojson2);
+    if (!a || !b) return { polyA: null, polyB: null, intersection: null, areaA: 0, areaB: 0, areaI: 0 };
+    const i = computeIntersection(a, b);
+    return {
+      polyA: a,
+      polyB: b,
+      intersection: i,
+      areaA: turf.area(a),
+      areaB: turf.area(b),
+      areaI: i ? turf.area(i) : 0,
+    };
   }, [comparisonData]);
 
-  // Toggle layer visibility
-  const handleLayerToggle = (layerName) => {
-    setVisibleLayers((prev) => ({
-      ...prev,
-      [layerName]: !prev[layerName],
-    }));
-  };
+  const bounds = useMemo(() => {
+    if (!comparisonData?.geojson1 || !comparisonData?.geojson2) return null;
+    return combinedBounds(comparisonData.geojson1, comparisonData.geojson2);
+  }, [comparisonData]);
 
-  // Handle map screenshot/download
+  const { handleLoad } = useMapFit(mapRef, bounds);
+
   const handleDownload = async () => {
-    if (!mapContainerRef.current) return;
-
+    if (!mapRef.current) return;
     try {
-      // Dynamic import html2canvas only when needed
-      const html2canvasModule = await import("html2canvas");
-      const html2canvas = html2canvasModule.default;
-
-      const canvas = await html2canvas(mapContainerRef.current, {
-        useCORS: true,
-        allowTaint: true,
-        scrollX: 0,
-        scrollY: 0,
-        windowWidth: document.documentElement.offsetWidth,
-        windowHeight: document.documentElement.offsetHeight,
-      });
-
-      // Create image from canvas
+      const map = mapRef.current.getMap?.();
+      if (!map) return;
+      map.once("render", () => {});
+      map.triggerRepaint();
+      await new Promise((r) => setTimeout(r, 120));
+      const canvas = map.getCanvas();
       const imgData = canvas.toDataURL("image/png");
-
-      // Create download link
-      const link = document.createElement("a");
-      link.href = imgData;
-      link.download = "geofence-comparison.png";
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    } catch (error) {
-      console.error("Error capturing map:", error);
+      const a = document.createElement("a");
+      a.href = imgData;
+      a.download = "geofence-comparison.png";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch (err) {
+      console.error("Error capturing map:", err);
       alert("Failed to download map. Please try again.");
     }
   };
 
-  // Prepare styles for each layer
-  const style1 = {
-    color: "#3388ff",
-    weight: 3,
-    opacity: 0.7,
-    fillColor: "#3388ff",
-    fillOpacity: 0.3,
-  };
-
-  const style2 = {
-    color: "#ff7800",
-    weight: 3,
-    opacity: 0.7,
-    fillColor: "#ff7800",
-    fillOpacity: 0.3,
-  };
-
-  const intersectionStyle = {
-    color: "#8e44ad",
-    weight: 2,
-    opacity: 0.9,
-    fillColor: "#8e44ad",
-    fillOpacity: 0.5,
-  };
-
-  // If no comparison data, show placeholder
   if (!comparisonData || !comparisonData.geojson1 || !comparisonData.geojson2) {
     return (
       <div className="h-[calc(100vh-128px)] bg-gray-100 flex items-center justify-center rounded-lg">
@@ -540,6 +148,9 @@ export default function GeofenceComparisonMap({ comparisonData }) {
       </div>
     );
   }
+
+  const toggle = (key) =>
+    setVisibleLayers((prev) => ({ ...prev, [key]: !prev[key] }));
 
   return (
     <div className="card">
@@ -558,159 +169,199 @@ export default function GeofenceComparisonMap({ comparisonData }) {
         </button>
       </div>
 
-      <div
-        className="bg-white rounded-lg overflow-hidden shadow-md relative h-[calc(100vh-200px)]"
-        ref={mapContainerRef}
-      >
-        <MapContainer
-          style={{ height: "100%", width: "100%" }}
-          center={[0, 0]}
-          zoom={2}
-          scrollWheelZoom={true}
-          zoomControl={false}
+      <div className="bg-white rounded-lg overflow-hidden shadow-md relative h-[calc(100vh-200px)]">
+        <MaplibreMap
           ref={mapRef}
+          initialViewState={{ longitude: 0, latitude: 0, zoom: 2 }}
+          style={{ width: "100%", height: "100%" }}
+          mapStyle={MAP_STYLES[styleKey]}
+          attributionControl={false}
+          preserveDrawingBuffer
+          onLoad={handleLoad}
         >
-          <ZoomControl position="bottomright" />
+          <NavigationControl position="bottom-right" />
+          <AttributionControl compact position="bottom-left" />
 
-          <LayersControl position="topright">
-            <LayersControl.BaseLayer checked name="OpenStreetMap">
-              <TileLayer
-                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          {visibleLayers.a && polyA && (
+            <Source id="src-a" type="geojson" data={polyA}>
+              <Layer
+                id="a-fill"
+                type="fill"
+                paint={{ "fill-color": STYLES.a.fill, "fill-opacity": 0.3 }}
               />
-            </LayersControl.BaseLayer>
-            <LayersControl.BaseLayer name="Satellite">
-              <TileLayer
-                attribution='&copy; <a href="https://www.esri.com">Esri</a>'
-                url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+              <Layer
+                id="a-line"
+                type="line"
+                paint={{ "line-color": STYLES.a.outline, "line-width": 3 }}
               />
-            </LayersControl.BaseLayer>
-          </LayersControl>
-
-          {mapBounds && <MapBounds bounds={mapBounds} />}
-
-          {/* First GeoJSON */}
-          {visibleLayers.geojson1 && (
-            <GeoJSON data={comparisonData.geojson1} style={style1} />
+            </Source>
           )}
 
-          {/* Second GeoJSON */}
-          {visibleLayers.geojson2 && (
-            <GeoJSON data={comparisonData.geojson2} style={style2} />
+          {visibleLayers.b && polyB && (
+            <Source id="src-b" type="geojson" data={polyB}>
+              <Layer
+                id="b-fill"
+                type="fill"
+                paint={{ "fill-color": STYLES.b.fill, "fill-opacity": 0.3 }}
+              />
+              <Layer
+                id="b-line"
+                type="line"
+                paint={{ "line-color": STYLES.b.outline, "line-width": 3 }}
+              />
+            </Source>
           )}
 
-          {/* Intersection - only show if calculation was successful */}
           {visibleLayers.intersection && intersection && (
-            <GeoJSON data={intersection} style={intersectionStyle} />
+            <Source id="src-int" type="geojson" data={intersection}>
+              <Layer
+                id="int-fill"
+                type="fill"
+                paint={{
+                  "fill-color": STYLES.intersection.fill,
+                  "fill-opacity": 0.5,
+                }}
+              />
+              <Layer
+                id="int-line"
+                type="line"
+                paint={{
+                  "line-color": STYLES.intersection.outline,
+                  "line-width": 2,
+                }}
+              />
+            </Source>
           )}
-        </MapContainer>
+        </MaplibreMap>
 
-        {/* Layer controls */}
-        <div className="absolute top-3 left-3 bg-white p-3 rounded-lg shadow-md z-50 min-w-[200px]">
+        <div className="absolute top-3 left-3 bg-white p-3 rounded-lg shadow-md z-10 min-w-[200px]">
           <h4 className="font-medium text-sm mb-2">Layers</h4>
           <div className="space-y-2">
-            <div className="flex items-center">
+            <label className="flex items-center cursor-pointer">
               <input
                 type="checkbox"
-                id="layer-geojson1"
-                checked={visibleLayers.geojson1}
-                onChange={() => handleLayerToggle("geojson1")}
+                checked={visibleLayers.a}
+                onChange={() => toggle("a")}
                 className="mr-2"
               />
-              <label
-                htmlFor="layer-geojson1"
-                className="text-sm flex items-center"
-              >
-                <div
+              <span className="text-sm flex items-center">
+                <span
                   className="w-3 h-3 mr-2 rounded-full"
-                  style={{ backgroundColor: style1.fillColor }}
-                ></div>
+                  style={{ backgroundColor: STYLES.a.fill }}
+                />
                 {comparisonData.file1Name}
-              </label>
-            </div>
-            <div className="flex items-center">
+              </span>
+            </label>
+            <label className="flex items-center cursor-pointer">
               <input
                 type="checkbox"
-                id="layer-geojson2"
-                checked={visibleLayers.geojson2}
-                onChange={() => handleLayerToggle("geojson2")}
+                checked={visibleLayers.b}
+                onChange={() => toggle("b")}
                 className="mr-2"
               />
-              <label
-                htmlFor="layer-geojson2"
-                className="text-sm flex items-center"
-              >
-                <div
+              <span className="text-sm flex items-center">
+                <span
                   className="w-3 h-3 mr-2 rounded-full"
-                  style={{ backgroundColor: style2.fillColor }}
-                ></div>
+                  style={{ backgroundColor: STYLES.b.fill }}
+                />
                 {comparisonData.file2Name}
-              </label>
-            </div>
-            {/* Only show intersection control if we have a valid intersection */}
+              </span>
+            </label>
             {intersection && (
-              <div className="flex items-center">
+              <label className="flex items-center cursor-pointer">
                 <input
                   type="checkbox"
-                  id="layer-intersection"
                   checked={visibleLayers.intersection}
-                  onChange={() => handleLayerToggle("intersection")}
+                  onChange={() => toggle("intersection")}
                   className="mr-2"
                 />
-                <label
-                  htmlFor="layer-intersection"
-                  className="text-sm flex items-center"
-                >
-                  <div
+                <span className="text-sm flex items-center">
+                  <span
                     className="w-3 h-3 mr-2 rounded-full"
-                    style={{ backgroundColor: intersectionStyle.fillColor }}
-                  ></div>
+                    style={{ backgroundColor: STYLES.intersection.fill }}
+                  />
                   Intersection
-                </label>
-              </div>
+                </span>
+              </label>
             )}
           </div>
         </div>
 
-        {/* Legend */}
-        <MapLegend labels={legendItems} />
+        <div className="absolute top-3 right-3 bg-white/95 rounded-lg shadow-md p-2 text-xs z-10">
+          <select
+            value={styleKey}
+            onChange={(e) => setStyleKey(e.target.value)}
+            className="border border-gray-200 rounded px-2 py-1 bg-white"
+            aria-label="Base layer"
+          >
+            {Object.keys(MAP_STYLES).map((k) => (
+              <option key={k} value={k}>
+                {MAP_STYLE_LABELS[k]}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="absolute bottom-8 right-4 bg-white p-3 rounded-lg shadow-md z-10 min-w-[200px]">
+          <h4 className="font-medium text-sm mb-2">Legend</h4>
+          <div className="space-y-2 text-sm">
+            <div className="flex items-center">
+              <span
+                className="w-4 h-4 mr-2 rounded"
+                style={{ backgroundColor: STYLES.a.fill }}
+              />
+              {comparisonData.file1Name} — {(areaA / 1_000_000).toFixed(2)} km²
+            </div>
+            <div className="flex items-center">
+              <span
+                className="w-4 h-4 mr-2 rounded"
+                style={{ backgroundColor: STYLES.b.fill }}
+              />
+              {comparisonData.file2Name} — {(areaB / 1_000_000).toFixed(2)} km²
+            </div>
+            <div className="flex items-center">
+              <span
+                className="w-4 h-4 mr-2 rounded"
+                style={{ backgroundColor: STYLES.intersection.fill }}
+              />
+              Intersection — {(areaI / 1_000_000).toFixed(2)} km²
+            </div>
+          </div>
+        </div>
       </div>
 
-      {/* Statistics */}
       <div className="mt-4 bg-gray-50 rounded-lg p-4 border border-gray-200">
-        <h3 className="font-medium text-gray-700 mb-2">
-          Comparison Statistics
-        </h3>
+        <h3 className="font-medium text-gray-700 mb-2">Comparison Statistics</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="bg-white p-3 rounded-lg border border-gray-200">
             <div className="text-sm text-gray-500">First Geofence Area</div>
             <div className="text-lg font-semibold flex items-center">
-              <div
+              <span
                 className="w-3 h-3 mr-2 rounded-full"
-                style={{ backgroundColor: style1.fillColor }}
-              ></div>
-              {(geojson1Area / 1000000).toFixed(2)} km²
+                style={{ backgroundColor: STYLES.a.fill }}
+              />
+              {(areaA / 1_000_000).toFixed(2)} km²
             </div>
           </div>
           <div className="bg-white p-3 rounded-lg border border-gray-200">
             <div className="text-sm text-gray-500">Second Geofence Area</div>
             <div className="text-lg font-semibold flex items-center">
-              <div
+              <span
                 className="w-3 h-3 mr-2 rounded-full"
-                style={{ backgroundColor: style2.fillColor }}
-              ></div>
-              {(geojson2Area / 1000000).toFixed(2)} km²
+                style={{ backgroundColor: STYLES.b.fill }}
+              />
+              {(areaB / 1_000_000).toFixed(2)} km²
             </div>
           </div>
           <div className="bg-white p-3 rounded-lg border border-gray-200">
             <div className="text-sm text-gray-500">Intersection Area</div>
             <div className="text-lg font-semibold flex items-center">
-              <div
+              <span
                 className="w-3 h-3 mr-2 rounded-full"
-                style={{ backgroundColor: intersectionStyle.fillColor }}
-              ></div>
-              {(intersectionArea / 1000000).toFixed(2)} km²
-              {intersectionArea === 0 && (
+                style={{ backgroundColor: STYLES.intersection.fill }}
+              />
+              {(areaI / 1_000_000).toFixed(2)} km²
+              {areaI === 0 && (
                 <span className="ml-2 text-xs text-red-500">
                   (No overlap detected)
                 </span>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { validateGeofence } from "../utils/geofenceUtils";
+import { useValidatorStore } from "../utils/validatorStore";
 
 export default function FileUploader({ onValidationComplete }) {
   const [file, setFile] = useState(null);
@@ -10,46 +10,42 @@ export default function FileUploader({ onValidationComplete }) {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef(null);
 
-  const handleFileChange = (e) => {
-    const selectedFile = e.target.files[0];
-    if (!selectedFile) return;
+  const loadGeojson = useValidatorStore((s) => s.loadGeojson);
+  const reset = useValidatorStore((s) => s.reset);
 
-    // File extension validation
-    if (!selectedFile.name.endsWith(".geojson")) {
+  const acceptFile = (candidate) => {
+    if (!candidate) return;
+    if (!candidate.name.endsWith(".geojson")) {
       setError("Error: Only files with .geojson extension are allowed.");
       setFile(null);
+      reset();
       return;
     }
-
     setError(null);
-    setFile(selectedFile);
+    setFile(candidate);
   };
+
+  const handleFileChange = (e) => acceptFile(e.target.files[0]);
 
   const handleDragOver = (e) => {
     e.preventDefault();
     setIsDragging(true);
   };
 
-  const handleDragLeave = () => {
-    setIsDragging(false);
-  };
+  const handleDragLeave = () => setIsDragging(false);
 
   const handleDrop = (e) => {
     e.preventDefault();
     setIsDragging(false);
+    acceptFile(e.dataTransfer.files[0]);
+  };
 
-    const droppedFile = e.dataTransfer.files[0];
-    if (!droppedFile) return;
-
-    // File extension validation
-    if (!droppedFile.name.endsWith(".geojson")) {
-      setError("Error: Only files with .geojson extension are allowed.");
-      setFile(null);
-      return;
-    }
-
+  const handleClearFile = (e) => {
+    e?.stopPropagation();
+    setFile(null);
     setError(null);
-    setFile(droppedFile);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    reset();
   };
 
   const handleUpload = async () => {
@@ -63,28 +59,21 @@ export default function FileUploader({ onValidationComplete }) {
 
     try {
       const reader = new FileReader();
-
-      reader.onload = async (e) => {
+      reader.onload = (e) => {
         try {
-          const content = e.target.result;
-          const geojsonData = JSON.parse(content);
-
-          // GeoJSON validation
-          const validationResult = validateGeofence(geojsonData);
-
-          // Send validation result to parent component
-          onValidationComplete(validationResult);
+          const geojsonData = JSON.parse(e.target.result);
+          loadGeojson(geojsonData, file.name);
+          if (onValidationComplete) onValidationComplete();
         } catch (err) {
           setError(`Error parsing GeoJSON: ${err.message}`);
+          reset();
         }
         setIsLoading(false);
       };
-
       reader.onerror = () => {
         setError("Error reading file.");
         setIsLoading(false);
       };
-
       reader.readAsText(file);
     } catch (err) {
       setError(`Error: ${err.message}`);
@@ -139,11 +128,9 @@ export default function FileUploader({ onValidationComplete }) {
             </p>
           </div>
           <button
+            aria-label="Remove file"
             className="text-gray-500 hover:text-red-500"
-            onClick={(e) => {
-              e.stopPropagation();
-              setFile(null);
-            }}
+            onClick={handleClearFile}
           >
             <i className="fas fa-times"></i>
           </button>
