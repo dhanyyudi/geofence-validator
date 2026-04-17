@@ -2,9 +2,9 @@
 
 A comprehensive web application for validating, fixing, and analyzing GeoJSON geofence files. Built with Next.js and React, this tool helps ensure your geofence data meets required standards and provides visual comparison capabilities.
 
-![Geofence Validator](https://img.shields.io/badge/Next.js-15.2.3-black?style=flat-square&logo=next.js)
+![Geofence Validator](https://img.shields.io/badge/Next.js-16.1.6-black?style=flat-square&logo=next.js)
 ![React](https://img.shields.io/badge/React-19.0.0-blue?style=flat-square&logo=react)
-![Leaflet](https://img.shields.io/badge/Leaflet-1.9.4-green?style=flat-square&logo=leaflet)
+![MapLibre](https://img.shields.io/badge/MapLibre-5.23.0-green?style=flat-square)
 
 ## Features
 
@@ -23,6 +23,13 @@ A comprehensive web application for validating, fixing, and analyzing GeoJSON ge
 - **Intersection Analysis**: Calculate and visualize overlapping areas
 - **Layer Toggle**: Switch between different visualization layers
 - **Screenshot Export**: Save comparison results as images
+
+### 🔁 Data Conversion
+- **Supported Inputs**: Convert `.kml`, `.kmz`, and zipped shapefiles (`.zip`) locally in the browser
+- **Auto-Normalization**: Output is cleaned automatically to match validator requirements
+- **Best-Effort Polygonization**: Closed linework is converted into polygon boundaries when safe
+- **Strict Rejection Rules**: Open lines, point-only data, and invalid CRS outputs are blocked with clear errors
+- **Preview + Download**: Review the cleaned polygon on the map and download `*.cleaned.geojson`
 
 ### 🛣️ Polyline Converter
 - **Multiple Input Methods**:
@@ -128,6 +135,30 @@ npm run start
 5. **Export Results**
    - Click "Download Screenshot" to save the comparison view
 
+### Converting Spatial Data
+
+1. **Navigate to Data Conversion Page**
+   - Click on the "Data Conversion" tab in the header
+
+2. **Upload Supported Input**
+   - Drag and drop a `.kml`, `.kmz`, or zipped shapefile `.zip`
+   - Files stay in the browser and are not uploaded to a server
+
+3. **Convert to Clean GeoJSON**
+   - Click "Convert to Clean GeoJSON"
+   - KML/KMZ are parsed locally
+   - SHP ZIP archives are read locally and merged if the archive contains multiple shapefiles
+
+4. **Review Normalized Output**
+   - The app removes Z coordinates automatically
+   - The app keeps only the largest polygon if multiple polygons are found
+   - The app removes interior holes and validates the final result against validator requirements
+   - Closed linework is polygonized when possible; open lines and point-only data are rejected
+
+5. **Download Result**
+   - Click "Download Clean GeoJSON"
+   - The downloaded filename uses the source name with `.cleaned.geojson`
+
 ### Converting Polylines
 
 1. **Navigate to Polyline Page**
@@ -177,10 +208,11 @@ npm run start
 
 ## Technology Stack
 
-- **Frontend Framework**: Next.js 15.2.3
+- **Frontend Framework**: Next.js 16.1.6
 - **UI Library**: React 19.0.0
-- **Mapping**: Leaflet 1.9.4, React-Leaflet 5.0.0
+- **Mapping**: MapLibre GL, react-map-gl
 - **Geospatial Processing**: Turf.js 7.2.0
+- **Spatial Conversion**: @tmcw/togeojson, JSZip, shpjs
 - **Styling**: Tailwind CSS 3.4.17
 - **Icons**: Font Awesome 6.4.0
 - **Analytics**: Vercel Speed Insights
@@ -193,23 +225,26 @@ geofence-validator/
 │   ├── page.js              # Validator page (home)
 │   ├── layout.js            # Root layout with global styles
 │   ├── globals.css          # Global CSS styles
+│   ├── conversion/
+│   │   └── page.js          # Data conversion page
 │   ├── compare/
 │   │   └── page.js          # Comparison page
 │   └── polyline/
 │       └── page.js          # Polyline converter page
 ├── components/
 │   ├── DashboardHeader.js   # Navigation header
+│   ├── DataConversionPage.js # Spatial data conversion workspace
 │   ├── FileUploader.js      # File upload component
 │   ├── Validator.js         # Validation results display
-│   ├── GeofenceMap.js       # Single geofence map
-│   ├── DirectMultiPolygonMap.js  # Advanced map display
 │   ├── GeofenceComparer.js  # File comparison uploader
 │   ├── GeofenceComparisonMap.js  # Comparison map display
+│   ├── GeofenceMapView.js   # Shared MapLibre polygon preview
 │   ├── ComparisonPage.js    # Comparison page layout
 │   ├── PolylineConverter.js # Polyline input handler
 │   ├── PolylineViewer.js    # Polyline map display
 │   └── PolylinePage.js      # Polyline page layout
 ├── utils/
+│   ├── dataConversion.js    # Spatial file conversion and normalization
 │   ├── geofenceUtils.js     # Geofence validation logic
 │   ├── PolylineUtils.js     # Polyline encoding/decoding
 │   └── OSRMUtils.js         # OSRM API integration
@@ -258,7 +293,7 @@ https://your-osrm-server.com/route/v1/{profile}/{coordinates}?{parameters}
 
 ### Map Not Loading
 - Check console for errors
-- Ensure Leaflet CSS is loaded
+- Ensure map tiles are reachable from your network
 - Verify file is valid GeoJSON
 
 ### Validation Fails
@@ -288,8 +323,11 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## Acknowledgments
 
 - [Next.js](https://nextjs.org/) - React framework
-- [Leaflet](https://leafletjs.com/) - Interactive maps
+- [MapLibre](https://maplibre.org/) - Interactive maps
 - [Turf.js](https://turfjs.org/) - Geospatial analysis
+- [shpjs](https://github.com/calvinmetcalf/shapefile-js) - Browser-side shapefile parsing
+- [JSZip](https://stuk.github.io/jszip/) - Browser-side zip reading
+- [toGeoJSON](https://github.com/tmcw/togeojson) - KML to GeoJSON conversion
 - [Font Awesome](https://fontawesome.com/) - Icons
 - [Tailwind CSS](https://tailwindcss.com/) - Styling
 
@@ -302,7 +340,15 @@ For issues, questions, or suggestions:
 
 ## Changelog
 
+### Version 0.2.0
+- Added `Data Conversion` page for `.kml`, `.kmz`, and `.zip` shapefile inputs
+- Added browser-side conversion pipeline with validator-ready GeoJSON normalization
+- Added MapLibre-based preview for converted data
+- Improved Polyline conversion input handling and render/zoom reliability
+- Replaced the default favicon with app-specific branding
+
 ### Version 0.1.0
+- Initial release with validator, compare, and polyline tooling
 - Initial release
 - Geofence validation and fixing
 - Geofence comparison tool

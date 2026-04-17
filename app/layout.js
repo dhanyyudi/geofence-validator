@@ -4,6 +4,13 @@ import { SpeedInsights } from "@vercel/speed-insights/next";
 export const metadata = {
   title: "Geofence Validator Dashboard",
   description: "Interactive app to validate and correct geofence files",
+  icons: {
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml" },
+    ],
+    shortcut: "/icon.svg",
+    apple: "/apple-icon.png",
+  },
 };
 
 export default function RootLayout({ children }) {

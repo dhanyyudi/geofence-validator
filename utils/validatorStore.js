@@ -65,7 +65,7 @@ export function downloadGeojson(geojson, sourceFilename, suffix = "fixed") {
   const blob = new Blob([json], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const baseName = sourceFilename
-    ? sourceFilename.replace(/\.geojson$/i, "")
+    ? sourceFilename.replace(/\.[^.]+$/i, "")
     : "geofence";
   const a = document.createElement("a");
   a.href = url;

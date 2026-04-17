@@ -74,15 +74,45 @@ function forEachGeometry(geojson, visit) {
 
 function collectPolygons(geojson) {
   const polygons = [];
-  forEachGeometry(geojson, (geom) => {
-    if (geom.type === "Polygon") {
-      polygons.push({ coordinates: geom.coordinates });
-    } else if (geom.type === "MultiPolygon") {
-      for (const polyCoords of geom.coordinates || []) {
-        polygons.push({ coordinates: polyCoords });
+  const visit = (node, inheritedProperties = {}) => {
+    if (!node || typeof node !== "object") return;
+
+    if (node.type === "FeatureCollection") {
+      (node.features || []).forEach((feature) => visit(feature, inheritedProperties));
+      return;
+    }
+
+    if (node.type === "Feature") {
+      visit(node.geometry, node.properties || {});
+      return;
+    }
+
+    if (node.type === "GeometryCollection") {
+      (node.geometries || []).forEach((geometry) =>
+        visit(geometry, inheritedProperties)
+      );
+      return;
+    }
+
+    if (node.type === "Polygon") {
+      polygons.push({
+        coordinates: node.coordinates,
+        properties: inheritedProperties,
+      });
+      return;
+    }
+
+    if (node.type === "MultiPolygon") {
+      for (const polyCoords of node.coordinates || []) {
+        polygons.push({
+          coordinates: polyCoords,
+          properties: inheritedProperties,
+        });
       }
     }
-  });
+  };
+
+  visit(geojson);
   return polygons;
 }
 
@@ -252,7 +282,7 @@ function fixPickLargestPolygon(geojson) {
     features: [
       {
         type: "Feature",
-        properties: getSourceProperties(geojson),
+        properties: largest.properties || getSourceProperties(geojson),
         geometry: {
           type: "Polygon",
           coordinates: largest.coordinates,
@@ -318,7 +348,7 @@ export function ensureStandardFormat(geojson) {
     features: [
       {
         type: "Feature",
-        properties: getSourceProperties(geojson),
+        properties: target.properties || getSourceProperties(geojson),
         geometry: {
           type: "Polygon",
           coordinates: target.coordinates,
@@ -340,7 +370,7 @@ export function selectVisiblePolygons(geojson, visibleLayers) {
     features: [
       {
         type: "Feature",
-        properties: getSourceProperties(geojson),
+        properties: polygons[idx].properties || getSourceProperties(geojson),
         geometry: {
           type: "Polygon",
           coordinates: polygons[idx].coordinates,
